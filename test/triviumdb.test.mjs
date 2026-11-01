@@ -130,6 +130,13 @@ test('client page boot, window.__SIGMA_TRIVIUM__.db handle, and commands', async
     const searchHits = await handle.search(null, { queryText: 'Obsidian Cipher', topK: 3 });
     assert.ok(searchHits.length > 0);
 
+    // Secondary property index & graph validation via client handle
+    await handle.createIndex('faction');
+    const idxInfo = await handle.indexInfo();
+    assert.ok(Array.isArray(idxInfo) && idxInfo.some(i => i.field === 'faction'));
+    const valid = await handle.validateGraph();
+    assert.equal(valid.valid, true);
+
     // Also test cross-extension command registration on page.registry
     assert.ok(page.registry.hasCommand('triviumdb.open'));
     assert.ok(page.registry.hasCommand('triviumdb.search'));

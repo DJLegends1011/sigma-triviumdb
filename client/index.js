@@ -66,6 +66,11 @@ function createTriviumClientApi(call) {
                 },
                 query: (query, params = {}) => exec({ type: 'query', query, params }),
                 leidenCluster: (config = {}) => exec({ type: 'leidenCluster', config }),
+                createIndex: (field) => exec({ type: 'createIndex', field }),
+                dropIndex: (field) => exec({ type: 'dropIndex', field }),
+                indexInfo: () => exec({ type: 'indexInfo' }),
+                validateGraph: () => exec({ type: 'validateGraph' }),
+                repairGraph: () => exec({ type: 'repairGraph' }),
                 buildQuiverIndex: () => exec({ type: 'buildQuiverIndex' }),
                 compact: () => exec({ type: 'compact' }),
                 flush: () => exec({ type: 'flush' }),
@@ -429,9 +434,44 @@ export default {
                         </section>
 
                         <section class="tdb-panel">
-                            <h3 class="tdb-heading">4. How Other Project Σ Extensions Hook Into TriviumDB</h3>
-                            <p class="tdb-note">Any Project Σ client extension can access TriviumDB via <code>window.__SIGMA_TRIVIUM__.db</code> or <code>ctx.commands.run('triviumdb.*')</code>:</p>
-                            <pre class="tdb-pre">const db = await window.__SIGMA_TRIVIUM__.db.open('my-ext', { dim: 1536 });
+                            <h3 class="tdb-heading">4. Node & Edge CRUD + Secondary Property Indexes</h3>
+                            <div class="tdb-row">
+                                <input type="search" class="glass-input tdb-flex" data-tdb-crud-name value="Viktor" placeholder="Node name">
+                                <input type="search" class="glass-input tdb-flex" data-tdb-crud-text value="Ripperdoc in Sector 4 who installed Alice's neural deck." placeholder="Node text / lore...">
+                                <button type="button" class="cl-btn cl-btn-primary cl-btn-sm" data-tdb-act="crud-insert">
+                                    <i class="fa-solid fa-plus" aria-hidden="true"></i> Insert + Index
+                                </button>
+                            </div>
+                            <div class="tdb-row">
+                                <label class="tdb-note">Src</label>
+                                <input type="number" class="glass-input tdb-num" data-tdb-edge-src value="1" min="1">
+                                <label class="tdb-note">Dst</label>
+                                <input type="number" class="glass-input tdb-num" data-tdb-edge-dst value="6" min="1">
+                                <input type="search" class="glass-input tdb-flex" data-tdb-edge-label value="treated_by" placeholder="Edge label">
+                                <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdb-act="crud-link">
+                                    <i class="fa-solid fa-link" aria-hidden="true"></i> Link
+                                </button>
+                            </div>
+                            <div class="tdb-row">
+                                <input type="search" class="glass-input tdb-flex" data-tdb-idx-field value="faction" placeholder="Payload field (e.g. faction, kind)">
+                                <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdb-act="idx-create">
+                                    <i class="fa-solid fa-bolt" aria-hidden="true"></i> Create Index
+                                </button>
+                                <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdb-act="idx-info">
+                                    <i class="fa-solid fa-list" aria-hidden="true"></i> Index Info
+                                </button>
+                                <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdb-act="graph-validate">
+                                    <i class="fa-solid fa-shield-halved" aria-hidden="true"></i> Validate Graph
+                                </button>
+                            </div>
+                            <pre class="tdb-pre" data-tdb-crud-out>// CRUD, secondary index & integrity output will appear here</pre>
+                        </section>
+                    </div>
+
+                    <section class="tdb-panel">
+                        <h3 class="tdb-heading">5. Quick-Start Snippet for Project Σ Extensions</h3>
+                        <p class="tdb-note">Any Project Σ client extension can access TriviumDB via <code>window.__SIGMA_TRIVIUM__.db</code> or <code>ctx.commands.run('triviumdb.*')</code>:</p>
+                        <pre class="tdb-pre">const db = await window.__SIGMA_TRIVIUM__.db.open('my-ext', { dim: 1536 });
 const a = await db.insert(vecA, { name: 'Alice', text: 'Knows the vault code' });
 const b = await db.insert(vecB, { name: 'Vault 7', kind: 'location' });
 await db.link(a, b, 'infiltrated', 0.95);
@@ -444,12 +484,95 @@ const hits = await db.searchAdvanced(null, {
   expandDepth: 2
 });
 const rows = await db.query('MATCH (n) WHERE n.id == $id RETURN n', { id: a });</pre>
-                        </section>
-                    </div>
+                    </section>
+
+                    <section class="tdb-panel">
+                        <h3 class="tdb-heading">The TriviumDB doors, as the extension exposes them</h3>
+                        <div data-tdb-doors></div>
+                    </section>
                 </div>`;
 
             const $ = (sel) => /** @type {HTMLElement} */ (el.querySelector(sel));
             const tile = (value, label) => `<div class="tdb-tile"><span class="tdb-tile-value">${esc(value)}</span><span class="tdb-tile-label">${esc(label)}</span></div>`;
+
+            const paintDoors = () => {
+                const list = (title, rows) => `<details class="tdb-doors"><summary>${esc(title)} (${rows.length})</summary><ul class="tdb-door-list">${rows.join('')}</ul></details>`;
+                const row = (name, type) => `<li><code>${esc(name)}</code> <span class="tdb-type">${esc(type)}</span></li>`;
+
+                const handleDoors = [
+                    row('db.insert(vector, payload?)', '=> Promise<number> (NodeId)'),
+                    row('db.batchInsert(vectors, payloads)', '=> Promise<number[]> (atomic batch commit)'),
+                    row('db.upsert(id, vector, payload?)', '=> Promise<void> (insert or overwrite by NodeId)'),
+                    row('db.get(id)', '=> Promise<{ id, vector, payload, edges } | null>'),
+                    row('db.updatePayload(id, payload)', '=> Promise<void> (replace JSON payload)'),
+                    row('db.patchPayload(id, patch)', '=> Promise<void> ($set, $inc, $unset partial update)'),
+                    row('db.updateVector(id, vector)', '=> Promise<void>'),
+                    row('db.delete(id)', '=> Promise<void> (atomic 3-layer delete: vector + payload + edges)'),
+                    row('db.link(src, dst, label?, weight?)', '=> Promise<void> (directed weighted edge, negative = inhibitory)'),
+                    row('db.unlink(src, dst, label?)', '=> Promise<void>'),
+                    row('db.shortestPath(source, target, { maxDepth?, label? })', '=> Promise<number[] | null>'),
+                    row('db.subgraph(id, { maxDepth?, labels?, direction? })', '=> Promise<{ nodes, edges, visitedNodes, traversedEdges, truncated }>'),
+                    row('db.leidenCluster({ minCommunitySize?, maxIterations?, withCentroids? })', '=> Promise<{ nodeToCluster, clusterLabels, centroids }>'),
+                    row('db.indexText(id, text)', '=> Promise<void> (BM25 full-text document indexing)'),
+                    row('db.indexKeyword(id, keyword)', '=> Promise<void> (Aho-Corasick exact keyword automaton)'),
+                    row('db.buildTextIndex()', '=> Promise<void> (compile text index & flush)'),
+                    row('db.createIndex(field)', '=> Promise<void> (O(1) secondary property index on payload field)'),
+                    row('db.dropIndex(field)', '=> Promise<void>'),
+                    row('db.indexInfo()', '=> Promise<PropertyIndexInfo[]>'),
+                    row('db.validateGraph()', '=> Promise<GraphIntegrityReport>'),
+                    row('db.repairGraph()', '=> Promise<GraphRepairReport>'),
+                    row('db.search(vector?, { queryText?, topK?, expandDepth?, minScore?, filter? })', '=> Promise<SearchHit[]>'),
+                    row('db.searchBatch(vectors, { parallelism?, topK?, minScore? })', '=> Promise<SearchHit[][]>'),
+                    row('db.searchAdvanced(vector?, SearchOptions)', '=> Promise<{ hits, context: { timingsMs, stageCounts, observations } }>'),
+                    row('db.query(tqlText, params?)', '=> Promise<{ type: "query", rows } | { type: "mutation", affected, createdIds }>'),
+                    row('db.buildQuiverIndex()', '=> Promise<void> (build QuIVer vector index)'),
+                    row('db.compact()', '=> Promise<void> (compact storage & reclaim tombstones)'),
+                    row('db.flush()', '=> Promise<void> (flush WAL & sidecars to disk)'),
+                    row('db.close()', '=> Promise<{ closed: boolean, namespace: string }>'),
+                    row('db.stats()', '=> Promise<{ namespace, dim, nodeCount, estimatedMemoryBytes, graph, storage }>'),
+                ];
+
+                const pipelineDoors = [
+                    row('topK / recallK / rerankK', 'number — final top-K (default 5), recall pool, and pre-diffusion rerank pool'),
+                    row('expandDepth / expandLabels / edgeDirection', 'number / string[] / "out"|"in"|"both" — SA-PPR graph walk hop depth & edge filter'),
+                    row('minEdgeWeight / maxEdgesPerNode', 'number — edge weight threshold and fanout cap during graph walk'),
+                    row('teleportAlpha', 'number (0.0..1.0) — Personalized PageRank restart probability'),
+                    row('diffusionBias', 'number[] — CCSA context-gated directional bias vector for graph diffusion'),
+                    row('enableTextHybridSearch / textBoost', 'boolean / number — fuse BM25 + keyword automaton via weighted RRF'),
+                    row('enableSparseResidual / fistaLambda / fistaThreshold', 'boolean / number — FISTA sparse residual shadow query for multi-concept recall'),
+                    row('enableDpp / dppQualityWeight', 'boolean / number — Determinantal Point Process diversity sampling'),
+                    row('enableRefractoryFatigue', 'boolean — neural refractory period to suppress repetitive hub nodes across turns'),
+                    row('payloadFilter', 'Record<string, FilterOperator> — MongoDB-style pre-filter ($eq, $ne, $gt, $gte, $lt, $lte, $in, $and, $or)'),
+                ];
+
+                const tqlDoors = [
+                    row('MATCH (a)-[:label]->(b) WHERE ... RETURN a, b', 'Cypher-style pattern matching over nodes and directed edges'),
+                    row('FIND {field: "value", score: {$gte: 0.5}} RETURN *', 'MongoDB-style document filter query (uses secondary index when created)'),
+                    row('SEARCH VECTOR $vec TOP 5 RETURN *', 'Vector ANN query with $param token expansion'),
+                    row('CREATE (n {name: "Alice", role: "netrunner"})', 'TQL mutation returning { type: "mutation", affected, createdIds }'),
+                    row('MATCH (n) WHERE n.id == $id DELETE n', 'TQL node deletion with safe $param expansion'),
+                ];
+
+                const sigmaDoors = [
+                    row('window.__SIGMA_TRIVIUM__.db.open(namespace, options?)', 'Global WebView entry point for opening a namespace handle'),
+                    row('triviumdb.open', 'ctx.commands.run("triviumdb.open", { namespace, options })'),
+                    row('triviumdb.search', 'ctx.commands.run("triviumdb.search", { namespace, vector, queryText, topK, expandDepth, advanced })'),
+                    row('triviumdb.query', 'ctx.commands.run("triviumdb.query", { namespace, query, params })'),
+                    row('triviumdb.list-namespaces', 'ctx.commands.run("triviumdb.list-namespaces")'),
+                    row('triviumdb.seed-demo', 'ctx.commands.run("triviumdb.seed-demo", { namespace, reset })'),
+                    row('triviumdb.status', 'ctx.commands.run("triviumdb.status")'),
+                    row('{{trivium_recall::query}}', 'Server prompt macro expanding top hybrid search hits from default namespace'),
+                    row('{{trivium_recall::namespace::query}}', 'Server prompt macro targeting a specific namespace'),
+                    row('POST /api/ext/triviumdb/handle', 'Server RPC route ({ request: { type: "open" | "execute" | "close" | "listNamespaces" | "flushAll" } })'),
+                ];
+
+                $('[data-tdb-doors]').innerHTML = [
+                    list('DatabaseHandle methods (window.__SIGMA_TRIVIUM__.db.open)', handleDoors),
+                    list('Cognitive Pipeline options (db.searchAdvanced)', pipelineDoors),
+                    list('TQL statements & patterns (db.query)', tqlDoors),
+                    list('Project Σ commands, macros & routes', sigmaDoors),
+                ].join('');
+            };
 
             const refreshStats = async () => {
                 try {
@@ -595,6 +718,66 @@ const rows = await db.query('MATCH (n) WHERE n.id == $id RETURN n', { id: a });<
                     } catch (err) {
                         outPre.textContent = `Error: ${why(err)}`;
                     }
+                } else if (act === 'crud-insert') {
+                    const name = /** @type {HTMLInputElement} */ ($('[data-tdb-crud-name]')).value.trim() || 'Unnamed Node';
+                    const text = /** @type {HTMLInputElement} */ ($('[data-tdb-crud-text]')).value.trim();
+                    const outPre = $('[data-tdb-crud-out]');
+                    try {
+                        const db = await dbApi.open(activeNs, { dim: 4 });
+                        const id = await db.insert(null, { name, kind: 'character', text });
+                        if (text) await db.indexText(id, text);
+                        await db.indexKeyword(id, name);
+                        await db.buildTextIndex();
+                        const node = await db.get(id);
+                        outPre.textContent = JSON.stringify({ insertedId: id, node }, null, 2);
+                        /** @type {HTMLInputElement} */ ($('[data-tdb-edge-dst]')).value = String(id);
+                        await refreshStats();
+                    } catch (err) {
+                        outPre.textContent = `Error: ${why(err)}`;
+                    }
+                } else if (act === 'crud-link') {
+                    const src = Number(/** @type {HTMLInputElement} */ ($('[data-tdb-edge-src]')).value) || 1;
+                    const dst = Number(/** @type {HTMLInputElement} */ ($('[data-tdb-edge-dst]')).value) || 2;
+                    const label = /** @type {HTMLInputElement} */ ($('[data-tdb-edge-label]')).value.trim() || 'related';
+                    const outPre = $('[data-tdb-crud-out]');
+                    try {
+                        const db = await dbApi.open(activeNs, { dim: 4 });
+                        await db.link(src, dst, label, 1.0);
+                        const srcNode = await db.get(src);
+                        outPre.textContent = JSON.stringify({ linked: { src, dst, label }, srcEdges: srcNode?.edges || [] }, null, 2);
+                        await refreshStats();
+                    } catch (err) {
+                        outPre.textContent = `Error: ${why(err)}`;
+                    }
+                } else if (act === 'idx-create') {
+                    const field = /** @type {HTMLInputElement} */ ($('[data-tdb-idx-field]')).value.trim() || 'faction';
+                    const outPre = $('[data-tdb-crud-out]');
+                    try {
+                        const db = await dbApi.open(activeNs, { dim: 4 });
+                        await db.createIndex(field);
+                        const indexes = await db.indexInfo();
+                        outPre.textContent = JSON.stringify({ createdIndex: field, indexes }, null, 2);
+                    } catch (err) {
+                        outPre.textContent = `Error: ${why(err)}`;
+                    }
+                } else if (act === 'idx-info') {
+                    const outPre = $('[data-tdb-crud-out]');
+                    try {
+                        const db = await dbApi.open(activeNs, { dim: 4 });
+                        const indexes = await db.indexInfo();
+                        outPre.textContent = JSON.stringify({ indexes }, null, 2);
+                    } catch (err) {
+                        outPre.textContent = `Error: ${why(err)}`;
+                    }
+                } else if (act === 'graph-validate') {
+                    const outPre = $('[data-tdb-crud-out]');
+                    try {
+                        const db = await dbApi.open(activeNs, { dim: 4 });
+                        const report = await db.validateGraph();
+                        outPre.textContent = JSON.stringify(report, null, 2);
+                    } catch (err) {
+                        outPre.textContent = `Error: ${why(err)}`;
+                    }
                 }
             });
 
@@ -604,6 +787,7 @@ const rows = await db.query('MATCH (n) WHERE n.id == $id RETURN n', { id: a });<
                 },
                 enter() {
                     shown = true;
+                    paintDoors();
                     void refreshStats();
                 },
                 leave() {

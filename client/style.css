@@ -226,3 +226,24 @@
     background: rgba(241, 196, 15, 0.16);
     color: #f1c40f;
 }
+
+.tdb-doors summary {
+    cursor: pointer;
+    color: var(--text-primary);
+    font-size: var(--font-sm);
+    padding: var(--space-2xs) 0;
+}
+
+.tdb-door-list {
+    margin: var(--space-xs) 0 var(--space-sm);
+    padding-left: var(--space-lg);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2xs);
+    font-size: var(--font-xs);
+}
+
+.tdb-type {
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}

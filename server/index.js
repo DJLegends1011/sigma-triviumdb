@@ -537,6 +537,23 @@ export function register(router, ctx) {
             case 'leidenCluster': {
                 return sanitizeBigInt(db.leidenCluster(operation.config || {}));
             }
+            case 'createIndex': {
+                db.createIndex(String(operation.field || ''));
+                return null;
+            }
+            case 'dropIndex': {
+                db.dropIndex(String(operation.field || ''));
+                return null;
+            }
+            case 'indexInfo': {
+                return sanitizeBigInt(db.indexInfo());
+            }
+            case 'validateGraph': {
+                return sanitizeBigInt(db.validateGraph());
+            }
+            case 'repairGraph': {
+                return sanitizeBigInt(db.repairGraphIndexes());
+            }
             case 'buildQuiverIndex': {
                 db.flush();
                 return null;
