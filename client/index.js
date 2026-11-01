@@ -379,7 +379,7 @@ export default {
                             <h3 class="tdb-heading">1. Hybrid Search & Cognitive Pipeline (Vector + BM25 + Graph Walk)</h3>
                             <div class="tdb-row">
                                 <input type="search" class="glass-input tdb-flex" data-tdb-search-q value="Obsidian Cipher" placeholder="Search text or keywords...">
-                                <label class="tdb-check"><input type="checkbox" data-tdb-search-adv checked> Advanced Pipeline</label>
+                                <label class="tdb-check"><input type="checkbox" class="cl-switch-input" data-tdb-search-adv checked><span class="cl-switch" aria-hidden="true"></span> Advanced Pipeline</label>
                                 <button type="button" class="cl-btn cl-btn-primary cl-btn-sm" data-tdb-act="search">
                                     <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> Search
                                 </button>
