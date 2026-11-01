@@ -1,0 +1,21 @@
+{
+    "id": "triviumdb",
+    "name": "TriviumDB",
+    "version": "0.1.0",
+    "author": "DJLegends",
+    "description": "Embedded vector, knowledge-graph, BM25 full-text, and TQL database engine (TriviumDB 0.9.0) for Project Σ extensions, with namespace isolation, cross-extension commands, window.__SIGMA_TRIVIUM__.db API, {{trivium_recall}} macro, and an interactive Workbench & Tour view.",
+    "requires": { "api": "2.6" },
+    "settings": {
+        "defaultDim": 1536,
+        "defaultSyncMode": "normal",
+        "recallNamespace": "playground",
+        "recallTopK": 5,
+        "injectPromptRecall": false,
+        "promptPlacement": "pre_history",
+        "promptDepth": 2
+    },
+    "contributes": ["app.action", "chat.window", "shell.view"],
+    "client": "client/index.js",
+    "style": "client/style.css",
+    "server": "server/index.js"
+}
