@@ -96,12 +96,9 @@ export default {
         const call = ctx.server.call;
         const dbApi = createTriviumClientApi(call);
 
-        // Install global handles for extensions/scripts in the WebView
+        // Install global handle for Project Σ extensions in the WebView
         if (typeof window !== 'undefined') {
             window.__SIGMA_TRIVIUM__ = Object.freeze({ db: dbApi, version: '0.9.0' });
-            window.__TAURITAVERN__ ??= { ready: Promise.resolve(), api: {} };
-            window.__TAURITAVERN__.api ??= {};
-            window.__TAURITAVERN__.api.db = dbApi;
         }
 
         // ---- Register cross-extension Project Σ commands ----
@@ -184,10 +181,14 @@ export default {
                 <div class="settings-row">
                     <label>Prompt Block Placement</label>
                     <select class="cl-select-fluid" data-tdb-set="promptPlacement">
-                        <option value="pre_history"${placement === 'pre_history' ? ' selected' : ''}>pre_history</option>
-                        <option value="post_history"${placement === 'post_history' ? ' selected' : ''}>post_history</option>
-                        <option value="at_depth"${placement === 'at_depth' ? ' selected' : ''}>at_depth</option>
+                        <option value="pre_history"${placement === 'pre_history' ? ' selected' : ''}>Before the conversation (pre_history)</option>
+                        <option value="post_history"${placement === 'post_history' ? ' selected' : ''}>After the conversation (post_history)</option>
+                        <option value="at_depth"${placement === 'at_depth' ? ' selected' : ''}>Inside the conversation (at_depth)</option>
                     </select>
+                </div>
+                <div class="settings-row" data-tdb-depth-row${placement === 'at_depth' ? '' : ' hidden'}>
+                    <label>Messages back from the newest</label>
+                    <input type="number" class="glass-input" data-tdb-set="promptDepth" min="0" max="50" value="${esc(ctx.settings.get('promptDepth') ?? 2)}">
                 </div>
                 <p class="settings-hint">
                     ${statusInfo?.ok
@@ -195,6 +196,7 @@ export default {
                         : `Native Engine not built for this platform yet: ${esc(statusInfo?.nativeError || 'unavailable')}. On Termux run <code>bash extensions/installed/triviumdb/scripts/build-termux.sh</code>.`}
                 </p>`;
 
+            const depthRow = el.querySelector('[data-tdb-depth-row]');
             const fields = el.querySelectorAll('[data-tdb-set]');
             for (const input of fields) {
                 input.addEventListener('change', () => {
@@ -206,7 +208,13 @@ export default {
                     } else {
                         ctx.settings.set(key, input.value.trim() || ctx.settings.defaults[key]);
                     }
+                    if (key === 'promptPlacement' && depthRow) {
+                        depthRow.hidden = input.value !== 'at_depth';
+                    }
                 });
+            }
+            for (const sel of el.querySelectorAll('select.cl-select-fluid')) {
+                CoreAPI.initCustomSelect?.(sel);
             }
         });
 
@@ -422,7 +430,7 @@ export default {
 
                         <section class="tdb-panel">
                             <h3 class="tdb-heading">4. How Other Project Σ Extensions Hook Into TriviumDB</h3>
-                            <p class="tdb-note">Any client extension or script can access TriviumDB via <code>window.__SIGMA_TRIVIUM__.db</code> (or TauriTavern's <code>window.__TAURITAVERN__.api.db</code>) or <code>ctx.commands.run('triviumdb.*')</code>:</p>
+                            <p class="tdb-note">Any Project Σ client extension can access TriviumDB via <code>window.__SIGMA_TRIVIUM__.db</code> or <code>ctx.commands.run('triviumdb.*')</code>:</p>
                             <pre class="tdb-pre">const db = await window.__SIGMA_TRIVIUM__.db.open('my-ext', { dim: 1536 });
 const a = await db.insert(vecA, { name: 'Alice', text: 'Knows the vault code' });
 const b = await db.insert(vecB, { name: 'Vault 7', kind: 'location' });

@@ -6,8 +6,8 @@ Embedded **Vector + Knowledge Graph + BM25 Full-Text + TQL** database engine ([T
 
 - **Multi-Namespace Isolation**: Each namespace (`open(namespace, options)`) opens an isolated `.tdb` mmap instance under the account's extension data directory.
 - **Three Ways to Hook In**:
-  1. **Global WebView Handle**: `window.__SIGMA_TRIVIUM__.db` (also aliases `window.__TAURITAVERN__.api.db` for drop-in TauriTavern extension compatibility).
-  2. **Project Σ Extension Commands**: `ctx.commands.run('triviumdb.open', ...)`, `triviumdb.search`, `triviumdb.query`, `triviumdb.seedDemo`, `triviumdb.status`.
+  1. **Global WebView Handle**: `window.__SIGMA_TRIVIUM__.db`.
+  2. **Project Σ Extension Commands**: `ctx.commands.run('triviumdb.open', ...)`, `triviumdb.search`, `triviumdb.query`, `triviumdb.seed-demo`, `triviumdb.list-namespaces`, `triviumdb.status`.
   3. **Prompt Macro & Auto-Recall Block**: Use `{{trivium_recall::query}}` or `{{trivium_recall::namespace::query}}` in any prompt, or toggle **Auto-inject knowledge recall block** in Settings > Extensions.
 - **Interactive Workbench & Conversation Window**:
   - Open **TriviumDB Workbench** from the app menu (`shell.view`) to seed a sample knowledge graph, run Hybrid / Cognitive Pipeline searches with stage timings, execute TQL (`MATCH`, `FIND`, `SEARCH VECTOR`, `CREATE`), and run subgraph / shortest-path / Leiden community clustering.

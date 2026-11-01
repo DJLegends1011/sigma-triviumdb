@@ -116,10 +116,10 @@ test('client page boot, window.__SIGMA_TRIVIUM__.db handle, and commands', async
     page = await sigma.session.page();
     await page.boot();
 
-    // Verify window.__SIGMA_TRIVIUM__.db and window.__TAURITAVERN__.api.db are exposed
+    // Verify window.__SIGMA_TRIVIUM__.db is exposed and __TAURITAVERN__ is not set
     const tdbGlobal = globalThis.window.__SIGMA_TRIVIUM__;
     assert.ok(tdbGlobal?.db, 'window.__SIGMA_TRIVIUM__.db should be installed');
-    assert.equal(globalThis.window.__TAURITAVERN__?.api?.db, tdbGlobal.db);
+    assert.equal(globalThis.window.__TAURITAVERN__, undefined);
 
     // Open playground via the client handle and query it
     const handle = await tdbGlobal.db.open('playground', { dim: 4 });
