@@ -15,8 +15,17 @@ echo "Extension dir: $EXT_DIR"
 echo "Target version: $TRIVIUM_VER"
 
 if command -v pkg >/dev/null 2>&1; then
-    echo "[1/4] Checking Termux packages (rust, nodejs, git, clang, make)..."
-    pkg install -y rust nodejs git clang make
+    # Install only what is missing. Never upgrade nodejs here: a Node major bump
+    # breaks Project Σ's better-sqlite3 (V8 ABI) until it is rebuilt.
+    echo "[1/4] Checking Termux packages (rust, git, clang, make)..."
+    MISSING=()
+    for c in cargo:rust git:git clang:clang make:make node:nodejs-lts; do
+        command -v "${c%%:*}" >/dev/null 2>&1 || MISSING+=("${c#*:}")
+    done
+    if ((${#MISSING[@]})); then
+        echo "Installing: ${MISSING[*]}"
+        apt-get install -y --no-upgrade "${MISSING[@]}"
+    fi
 fi
 
 TMP_BUILD="$(mktemp -d "${TMPDIR:-/tmp}/triviumdb-build.XXXXXX")"
