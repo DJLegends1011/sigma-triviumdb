@@ -42,6 +42,10 @@ const PRIME_TTL_MS = 30 * 60 * 1000;
 const STUDIO_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 // a text-search hit scores above this; a node the words did not touch scores below 1
 const TEXT_HIT = 2;
+// a chat's greeting is the card's opening, repeated in every chat with it: it answers almost any query a little
+const GREETING_PENALTY = 0.05;
+// bumped when what is embedded, or how, changes: an index built before reads as stale
+const INDEX_FORMAT = 'v2';
 // connection kinds that have no embeddings endpoint of their own
 const NO_EMBEDDINGS = new Set(['anthropic', 'vertex', 'claude-subscription', 'codex-subscription', 'antigravity-subscription']);
 
@@ -139,7 +143,7 @@ export function registerRecall(router, ctx, engine) {
             model: model || (kind === 'openrouter' ? 'openai/text-embedding-3-small' : 'text-embedding-3-small'),
         };
     }
-    const signatureOf = (target) => (target && !target.error ? `${target.via}|${target.base}|${target.model}` : 'keyword');
+    const signatureOf = (target) => (target && !target.error ? `${target.via}|${target.base}|${target.model}|${INDEX_FORMAT}` : `keyword|${INDEX_FORMAT}`);
 
     /** How long a 429 asks to wait, in ms: Retry-After, Google's RetryInfo, or "retry in 54.4s"; null when it does not say. */
     function retryDelayOf(resp, json, text) {
@@ -191,16 +195,23 @@ export function registerRecall(router, ctx, engine) {
     }
 
     /** One unit vector per text, in order. */
+    // opts.role: 'doc' for what is indexed, 'query' for what is searched with. Models trained for retrieval
+    // embed the two differently (Gemini's task types, nomic's prefixes), which ranks the right passage higher.
     async function embedTexts(target, texts, signal, opts = {}) {
         const out = [];
+        const query = opts.role === 'query';
+        const nomic = /nomic-embed/i.test(target.model);
         for (let i = 0; i < texts.length; i += EMBED_BATCH) {
-            const batch = texts.slice(i, i + EMBED_BATCH).map(t => clip(t, EMBED_CHARS) || ' ');
+            const batch = texts.slice(i, i + EMBED_BATCH).map(t => {
+                const text = clip(t, EMBED_CHARS) || ' ';
+                return nomic ? `${query ? 'search_query' : 'search_document'}: ${text}` : text;
+            });
             let vectors;
             if (target.via === 'gemini') {
                 const json = await postJson(
                     `${target.base}/models/${encodeURIComponent(target.model)}:batchEmbedContents`,
                     target.key ? { 'x-goog-api-key': target.key } : {},
-                    { requests: batch.map(text => ({ model: `models/${target.model}`, content: { parts: [{ text }] } })) },
+                    { requests: batch.map(text => ({ model: `models/${target.model}`, content: { parts: [{ text }] }, taskType: query ? 'RETRIEVAL_QUERY' : 'RETRIEVAL_DOCUMENT' })) },
                     signal,
                     opts,
                 );
@@ -280,7 +291,7 @@ export function registerRecall(router, ctx, engine) {
                 row: { src: 'msg', chat_id: chat.id, message_id: r.id, seq: r.seq, world: null, uid: null },
                 payload: {
                     src: 'msg', chatId: chat.id, charId: chat.char_id, seq: r.seq, messageId: r.id,
-                    user: !!r.is_user, name, chat: chat.name, char: chat.character_name || '', at: r.at || null,
+                    user: !!r.is_user, greeting: r.seq === 0 && !r.is_user, name, chat: chat.name, char: chat.character_name || '', at: r.at || null,
                     text: clip(text, SNIPPET_CHARS),
                 },
             });
@@ -519,15 +530,27 @@ export function registerRecall(router, ctx, engine) {
                 rank++;
             }
         }
-        const scoreOf = (h) => (h.sem ?? 0) + (h.kw ? 0.15 : 0) - (h.sem === null ? (h.kwRank || 0) * 0.001 : 0);
-        return [...found.values()].sort((a, b) => scoreOf(b) - scoreOf(a)).map(h => sanitizeBigInt(h));
+        const scoreOf = (h) => (h.sem ?? 0) + (h.kw ? 0.15 : 0) - (h.sem === null ? (h.kwRank || 0) * 0.001 : 0)
+            - (h.payload?.greeting ? GREETING_PENALTY : 0);
+        // the same text in several places (a greeting in every chat, the shared start of branches) shows once
+        const seen = new Set();
+        return [...found.values()]
+            .sort((a, b) => scoreOf(b) - scoreOf(a))
+            .filter(h => {
+                const p = h.payload || {};
+                const key = `${p.src}|${p.src === 'lore' ? p.world : p.charId}|${p.text}`;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            })
+            .map(h => sanitizeBigInt(h));
     }
 
     const view = (h) => {
         const p = h.payload || {};
         const base = { id: h.id, src: p.src, match: h.sem === null ? null : Math.round(Math.max(0, Math.min(1, h.sem)) * 100), words: !!h.kw, text: p.text || '' };
         if (p.src === 'lore') return { ...base, world: p.world, uid: p.uid, title: p.title, keys: p.keys || [], off: !!p.off };
-        return { ...base, chatId: p.chatId, charId: p.charId, seq: p.seq, messageId: p.messageId, user: !!p.user, name: p.name, chat: p.chat, char: p.char, at: p.at };
+        return { ...base, chatId: p.chatId, charId: p.charId, seq: p.seq, messageId: p.messageId, user: !!p.user, greeting: !!p.greeting, name: p.name, chat: p.chat, char: p.char, at: p.at };
     };
 
     // ---- recall in the prompt ----
@@ -563,7 +586,7 @@ export function registerRecall(router, ctx, engine) {
         if (!target || target.error || signatureOf(target) !== sp.sig) return false;
         const text = recentText(db, chatId, extra);
         if (!text) return false;
-        const [vec] = await embedTexts(target, [text], signal);
+        const [vec] = await embedTexts(target, [text], signal, { role: 'query' });
         primed.set(keyOf(user, chatId), { text, vec, at: Date.now(), sig: sp.sig });
         return true;
     }
@@ -606,7 +629,7 @@ export function registerRecall(router, ctx, engine) {
         const filter = scope === 'character' ? { src: 'msg', charId: chat.char_id } : { src: 'msg', chatId };
         const hits = searchIndex(entry, { vec, text: words, k: topK * 6 + skip, filter, minScore, keywords: !vec })
             .map(view)
-            .filter(h => h.src === 'msg' && (h.chatId !== chatId || h.seq <= cutoff))
+            .filter(h => h.src === 'msg' && !h.greeting && (h.chatId !== chatId || h.seq <= cutoff))
             .slice(0, topK);
         if (!hits.length) return { hits, text: '', by: vec ? 'meaning' : 'words' };
 
@@ -707,7 +730,7 @@ export function registerRecall(router, ctx, engine) {
             if (!target) return res.json({ ok: true, mode: 'words' });
             if (target.error) return res.status(400).json({ error: target.error });
             const t0 = Date.now();
-            const [vec] = await embedTexts(target, ['Smart Recall connection test'], AbortSignal.timeout(60_000));
+            const [vec] = await embedTexts(target, ['Smart Recall connection test'], AbortSignal.timeout(60_000), { role: 'query' });
             res.json({ ok: true, mode: 'meaning', model: target.model, dim: vec.length, ms: Date.now() - t0 });
         } catch (e) { fail(res, e, 502); }
     });
@@ -731,7 +754,7 @@ export function registerRecall(router, ctx, engine) {
             if (sp.space !== KEYWORD_SPACE) {
                 const target = embedTarget(db);
                 if (target && !target.error && signatureOf(target) === sp.sig) {
-                    [vec] = await embedTexts(target, [q], AbortSignal.timeout(60_000));
+                    [vec] = await embedTexts(target, [q], AbortSignal.timeout(60_000), { role: 'query' });
                 }
             }
             const minScore = vec ? Math.max(0, num(db, 'recallMinScore', 0, 1) - 0.1) : 0;

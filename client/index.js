@@ -105,7 +105,7 @@ export default {
             const pic = h.user
                 ? '<span class="tdb-hit-icon" aria-hidden="true"><i class="fa-solid fa-user"></i></span>'
                 : img ? `<img class="tdb-hit-avatar" src="${esc(img)}" alt="" loading="lazy">` : '<span class="tdb-hit-icon" aria-hidden="true"><i class="fa-solid fa-comment"></i></span>';
-            const where = [h.chat ? `“${h.chat}”` : '', `#${h.seq}`, fmtDate(h.at)].filter(Boolean).join(' · ');
+            const where = [h.chat ? `“${h.chat}”` : '', h.greeting ? 'greeting' : `#${h.seq}`, fmtDate(h.at)].filter(Boolean).join(' · ');
             return `<button type="button" class="tdb-hit${compact ? ' is-compact' : ''}" data-tdb-hit="${esc(ref)}">
                 ${pic}
                 <span class="tdb-hit-main">
@@ -202,7 +202,7 @@ export default {
                         <div class="tdb-status-main">
                             <div class="tdb-status-line">${how}</div>
                             <div class="tdb-status-line">${what} ${waiting}</div>
-                            ${ix.stale ? '<div class="tdb-status-line tdb-warn-text">The way text is understood changed in the settings; index again to search that way.</div>' : ''}
+                            ${ix.stale ? '<div class="tdb-status-line tdb-warn-text">The index was built another way (other settings, or an older version of Smart Recall). Re-index to search this way.</div>' : ''}
                             ${st.connectionError ? `<div class="tdb-status-line tdb-warn-text">${esc(st.connectionError)}</div>` : ''}
                             ${job?.status === 'failed' ? `<div class="tdb-status-line tdb-warn-text">The last indexing stopped: ${esc(job.error || 'unknown error')}</div>` : ''}
                         </div>

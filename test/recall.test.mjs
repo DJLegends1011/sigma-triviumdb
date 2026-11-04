@@ -113,6 +113,7 @@ before(async () => {
     const other = await api(`/characters/${charId}/chats`, 'POST', { name: 'Old campaign' });
     otherChatId = other.body.id || other.body.chat?.id;
     await api(`/chats/${otherChatId}/messages`, 'PUT', { messages: [
+        { name: 'Aria', is_user: false, is_system: false, mes: 'Welcome back, old friend.' },
         { name: 'Aria', is_user: false, is_system: false, mes: 'The great wyrm set the forest ablaze with its flames.' },
         { name: 'Traveler', is_user: true, is_system: false, mes: 'I raised my steel and charged.' },
     ] });
@@ -137,7 +138,7 @@ test('status before indexing says what waits', async () => {
     assert.equal(st.body.mode, 'meaning');
     assert.equal(st.body.connection.model, 'mock-embed');
     assert.equal(st.body.index.built, false);
-    assert.ok(st.body.index.library.messages >= 13);
+    assert.ok(st.body.index.library.messages >= 14);
     assert.equal(st.body.index.library.lore, 2);
 });
 
@@ -154,7 +155,7 @@ test('indexing embeds the library once, and a second pass embeds nothing', async
     assert.equal(st.job.status, 'done', JSON.stringify(st.job));
     assert.equal(st.index.built, true);
     assert.equal(st.index.indexed.lore, 2);
-    assert.equal(st.index.indexed.messages, 13);
+    assert.equal(st.index.indexed.messages, 14);
     assert.equal(st.index.waiting.messages, 0);
 
     const before = embedded;
@@ -248,6 +249,29 @@ test('indexing waits out a per-minute rate limit instead of failing', async () =
     assert.equal(st.index.waiting.messages, 0);
     assert.equal(fail429, 0, 'the 429 was hit');
     assert.ok(Date.now() - t0 >= 1200, 'it waited as long as the service asked');
+});
+
+test('a greeting repeated in every chat shows once, below a real moment that matches as well', async () => {
+    const greeting = 'Welcome to the fire festival, where the dragon dances at dawn.';
+    const ids = [];
+    for (const name of ['Festival one', 'Festival two']) {
+        const c = await api(`/characters/${charId}/chats`, 'POST', { name });
+        const id = c.body.id || c.body.chat?.id;
+        ids.push(id);
+        await api(`/chats/${id}/messages`, 'PUT', { messages: [
+            { name: 'Aria', is_user: false, is_system: false, mes: greeting },
+            { name: 'Traveler', is_user: true, is_system: false, mes: 'The dragon breathed fire over the dancers at dawn.' },
+        ] });
+    }
+    await ext('/recall/index', 'POST', {});
+    await waitForJobs();
+    const s = await ext('/recall/search', 'POST', { q: 'dragon fire', scope: 'chats', limit: 30 });
+    const greetings = s.body.hits.filter(h => h.text === greeting);
+    assert.equal(greetings.length, 1, 'the same greeting in two chats is one result');
+    assert.equal(greetings[0].greeting, true);
+    const moment = s.body.hits.findIndex(h => /breathed fire over the dancers/.test(h.text));
+    assert.ok(moment >= 0 && moment < s.body.hits.indexOf(greetings[0]), 'the real moment ranks above the greeting');
+    assert.equal(s.body.hits.filter(h => /breathed fire over the dancers/.test(h.text)).length, 1, 'branch-shared text shows once');
 });
 
 test('the macro writes the chat recall anywhere', async () => {
