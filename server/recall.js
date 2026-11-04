@@ -122,8 +122,11 @@ export function registerRecall(router, ctx, engine) {
         if (kind === 'gemini') {
             return { via: 'gemini', kind, name: row.name, base: base || STUDIO_BASE, key: row.api_key || '', model: model || 'gemini-embedding-001' };
         }
-        if (NO_EMBEDDINGS.has(kind) || /^cli:/i.test(base)) {
-            return { error: `“${row.name}” cannot make embeddings. Pick an OpenAI-compatible connection (OpenAI, OpenRouter, Ollama, LM Studio…) or Google AI Studio.` };
+        if (/-subscription$/.test(kind) || /^cli:/i.test(base)) {
+            return { error: `“${row.name}” signs in with a subscription, and subscriptions (ChatGPT, Claude, Antigravity) give no embeddings. Pick an API-key connection: Google AI Studio (a key from a project without billing is free), OpenRouter, OpenAI, or a local Ollama / LM Studio.` };
+        }
+        if (NO_EMBEDDINGS.has(kind)) {
+            return { error: `“${row.name}” (${kind}) has no embeddings endpoint. Pick Google AI Studio, OpenRouter, OpenAI, or an OpenAI-compatible server such as Ollama or LM Studio.` };
         }
         const fallbackBase = kind === 'openrouter' ? 'https://openrouter.ai/api/v1' : '';
         if (!base && !fallbackBase) return { error: `“${row.name}” has no endpoint address.` };
@@ -138,9 +141,23 @@ export function registerRecall(router, ctx, engine) {
     }
     const signatureOf = (target) => (target && !target.error ? `${target.via}|${target.base}|${target.model}` : 'keyword');
 
-    async function postJson(url, headers, body, signal) {
+    /** How long a 429 asks to wait, in ms: Retry-After, Google's RetryInfo, or "retry in 54.4s"; null when it does not say. */
+    function retryDelayOf(resp, json, text) {
+        const ra = Number(resp.headers.get('retry-after'));
+        if (Number.isFinite(ra) && ra > 0) return ra * 1000;
+        const info = (json?.error?.details || []).find(d => String(d['@type'] || '').endsWith('RetryInfo'));
+        const m = /^(\d+(?:\.\d+)?)s$/.exec(String(info?.retryDelay || '')) || /retry in (\d+(?:\.\d+)?)\s*s/i.exec(text);
+        return m ? Math.ceil(Number(m[1]) * 1000) : null;
+    }
+
+    /**
+     * patient: a background job, which waits out rate limits (as long as the service asks, up to ~2 min each,
+     * a dozen times) and says so through onWait; a search or a prompt gives up after two short tries.
+     */
+    async function postJson(url, headers, body, signal, { patient = false, onWait } = {}) {
         let lastError = null;
-        for (let attempt = 0; attempt < 3; attempt++) {
+        const tries = patient ? 12 : 3;
+        for (let attempt = 0; attempt < tries; attempt++) {
             const timeout = AbortSignal.timeout(90_000);
             const sig = signal ? AbortSignal.any([signal, timeout]) : timeout;
             let resp;
@@ -159,13 +176,22 @@ export function registerRecall(router, ctx, engine) {
             const said = json?.error?.message || json?.error || json?.message || text.slice(0, 300) || resp.statusText;
             lastError = new Error(`${resp.status} ${typeof said === 'string' ? said : JSON.stringify(said)}`);
             if (resp.status !== 429 && resp.status < 500) break;
-            await sleep(1500 * (attempt + 1), signal);
+            // a quota that is spent for the day (not per minute) never comes back by waiting
+            if (resp.status === 429 && /per ?day|PerDay|daily/i.test(text)) break;
+            let wait = 1500 * (attempt + 1);
+            if (resp.status === 429) {
+                const asked = retryDelayOf(resp, json, text);
+                if (!patient) { if (asked && asked > 5000) break; }
+                else wait = Math.min(125_000, (asked ?? 20_000) + 1500);
+            }
+            if (patient) onWait?.(wait);
+            await sleep(wait, signal);
         }
         throw lastError || new Error('the embeddings request failed');
     }
 
     /** One unit vector per text, in order. */
-    async function embedTexts(target, texts, signal) {
+    async function embedTexts(target, texts, signal, opts = {}) {
         const out = [];
         for (let i = 0; i < texts.length; i += EMBED_BATCH) {
             const batch = texts.slice(i, i + EMBED_BATCH).map(t => clip(t, EMBED_CHARS) || ' ');
@@ -176,11 +202,12 @@ export function registerRecall(router, ctx, engine) {
                     target.key ? { 'x-goog-api-key': target.key } : {},
                     { requests: batch.map(text => ({ model: `models/${target.model}`, content: { parts: [{ text }] } })) },
                     signal,
+                    opts,
                 );
                 vectors = (json.embeddings || []).map(e => e.values);
             } else {
                 const headers = target.key ? { authorization: 'Bearer ' + target.key } : {};
-                const json = await postJson(`${target.base}/embeddings`, headers, { model: target.model, input: batch }, signal);
+                const json = await postJson(`${target.base}/embeddings`, headers, { model: target.model, input: batch }, signal, opts);
                 vectors = [...(json.data || [])].sort((a, b) => (a.index ?? 0) - (b.index ?? 0)).map(d => d.embedding);
             }
             if (vectors.length !== batch.length || vectors.some(v => !Array.isArray(v) || !v.length)) {
@@ -219,7 +246,7 @@ export function registerRecall(router, ctx, engine) {
         let dim = KEYWORD_DIM;
         let space = KEYWORD_SPACE;
         if (target) {
-            dim = (await embedTexts(target, ['dimension probe'], signal))[0].length;
+            dim = (await embedTexts(target, ['dimension probe'], signal, { patient: true }))[0].length;
             space = `recall-${fnv(sig)}-${dim}`;
         }
         forgetSpace(db, user);
@@ -328,7 +355,8 @@ export function registerRecall(router, ctx, engine) {
             if (!queue.length) return;
             const batch = queue;
             queue = [];
-            const vectors = target ? await embedTexts(target, batch.map(i => i.embedText), signal) : batch.map(i => textToDemoVector(i.embedText, sp.dim));
+            const onWait = (ms) => progress?.({ done: Math.min(seen, total), total, note: `Waiting ${Math.round(ms / 1000)}s for ${target.name}'s rate limit` });
+            const vectors = target ? await embedTexts(target, batch.map(i => i.embedText), signal, { patient: true, onWait }) : batch.map(i => textToDemoVector(i.embedText, sp.dim));
             const now = Date.now();
             const upsert = db.prepare(`INSERT INTO ${TABLE} (key, space, node, digest, src, chat_id, message_id, seq, world, uid, updated_at)
                 VALUES (@key, @space, @node, @digest, @src, @chat_id, @message_id, @seq, @world, @uid, @updated_at)

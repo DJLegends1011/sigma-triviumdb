@@ -41,12 +41,19 @@ function embed(text) {
 
 let calls = 0;
 let embedded = 0;
+let fail429 = 0;
 const mock = http.createServer(async (req, res) => {
     let raw = '';
     for await (const chunk of req) raw += chunk;
     if (req.url !== '/v1/embeddings') { res.writeHead(404).end('{}'); return; }
     const body = JSON.parse(raw);
     calls++;
+    if (fail429 > 0) {
+        fail429--;
+        res.writeHead(429, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { code: 429, message: 'You exceeded your current quota. Quota exceeded for metric: embed_content_free_tier_requests, limit: 100. Please retry in 1.2s.', status: 'RESOURCE_EXHAUSTED' } }));
+        return;
+    }
     const input = Array.isArray(body.input) ? body.input : [body.input];
     embedded += input.length;
     res.writeHead(200, { 'content-type': 'application/json' });
@@ -227,6 +234,20 @@ test('new and edited messages join the index on their own', async () => {
     await waitForJobs();
     // the new message, plus the queries the search and the recall embedded
     assert.ok(embedded - before <= 4 + 80, `${embedded - before} embedded`);
+});
+
+test('indexing waits out a per-minute rate limit instead of failing', async () => {
+    await api(`/chats/${otherChatId}/messages`, 'POST', { mes: 'The drake circled the tower twice before it landed.' });
+    await waitForJobs();
+    await api(`/chats/${otherChatId}/messages`, 'POST', { mes: 'Its flames lit the whole valley.' });
+    fail429 = 1;
+    const t0 = Date.now();
+    await ext('/recall/index', 'POST', {});
+    const st = await waitForJobs();
+    assert.equal(st.job.status, 'done', JSON.stringify(st.job));
+    assert.equal(st.index.waiting.messages, 0);
+    assert.equal(fail429, 0, 'the 429 was hit');
+    assert.ok(Date.now() - t0 >= 1200, 'it waited as long as the service asked');
 });
 
 test('the macro writes the chat recall anywhere', async () => {
