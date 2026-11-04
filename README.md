@@ -1,30 +1,50 @@
-# TriviumDB for Project Σ (`sigma-triviumdb`)
+# TriviumDB Smart Recall for Project Σ (`sigma-triviumdb`)
 
-Embedded **Vector + Knowledge Graph + BM25 Full-Text + TQL** database engine ([TriviumDB 0.9.0](https://github.com/YoKONCy/TriviumDB)) for Project Σ extensions, modeled after TauriTavern's `window.__TAURITAVERN__.api.db` contract and Project Σ's `hello-world` tour.
+**Find any moment from your chats and lorebooks by what it meant, not the exact words, and let the AI remember the moments that matter in long chats.**
 
-## Features
+Runs on [TriviumDB 0.9.0](https://github.com/YoKONCy/TriviumDB), an embedded vector + BM25 + knowledge-graph engine, which other extensions can use directly too.
 
-- **Multi-Namespace Isolation**: Each namespace (`open(namespace, options)`) opens an isolated `.tdb` mmap instance under the account's extension data directory.
-- **Three Ways to Hook In**:
-  1. **Global WebView Handle**: `window.__SIGMA_TRIVIUM__.db`.
-  2. **Project Σ Extension Commands**: `ctx.commands.run('triviumdb.open', ...)`, `triviumdb.search`, `triviumdb.query`, `triviumdb.seed-demo`, `triviumdb.list-namespaces`, `triviumdb.status`.
-  3. **Prompt Macro & Auto-Recall Block**: Use `{{trivium_recall::query}}` or `{{trivium_recall::namespace::query}}` in any prompt, or toggle **Auto-inject knowledge recall block** in Settings > Extensions.
-- **Interactive Workbench & Conversation Window**:
-  - Open **TriviumDB Workbench** from the app menu (`shell.view`) to seed a sample knowledge graph, run Hybrid / Cognitive Pipeline searches with stage timings, execute TQL (`MATCH`, `FIND`, `SEARCH VECTOR`, `CREATE`), and run subgraph / shortest-path / Leiden community clustering.
-  - Open the **TriviumDB** window inside any chat (`chat.window`) to inspect and search namespaces alongside your conversation.
+## What you get
 
-## Platform Support & Native Termux Build
+- **Smart Recall view** (menu → *Smart Recall*): one search box over every chat message and lorebook entry. Type *"the night she told me about her brother"* and find the message even if it never used those words. Tap a result to jump to that message in its chat, or open the lorebook entry.
+- **Remind the AI** (in any chat: the *Smart Recall* window): before each reply, the few older messages most relevant to what is happening now are added to the prompt, so a 2,000-message chat still remembers the promise from message 40. Look in *this chat* or *every chat with this character*. The window shows what the last reply was reminded of, and previews the next.
+- **Keeps itself up to date**: new, edited and deleted messages and lorebook changes are indexed in the background as you chat.
 
-Bundled prebuilt N-API binaries in `native/`:
-- `triviumdb.win32-x64-msvc.node` (Windows x64)
-- `triviumdb.linux-arm64-gnu.node` (Linux ARM64 / `proot-distro` on Android)
-- `triviumdb.linux-x64-gnu.node` (Linux x64)
-- `triviumdb.darwin-arm64.node` (macOS Apple Silicon)
+## Setup
 
-### Building for Native Termux (`android-arm64` Bionic)
-Because TriviumDB is 100% pure Rust with zero C/C++ dependencies, you can compile `triviumdb.android-arm64.node` directly inside native Termux with a single command:
+1. **Settings → Extensions → TriviumDB Smart Recall → Understand text with**: pick a connection that can make embeddings:
+   OpenAI or any OpenAI-compatible server (Ollama, LM Studio, vLLM, llama.cpp…), OpenRouter, or Google AI Studio.
+   Leave the model empty for `text-embedding-3-small` (`gemini-embedding-001` on Google); local servers need their model name, e.g. `nomic-embed-text`. Press **Test**.
+   *No connection?* Smart Recall still works, matching words instead of meaning.
+2. Open **Smart Recall** and press **Index my library**. It runs in the background and shows progress; the status card estimates the tokens first.
+3. Search, or switch on **Remind the AI** in a chat.
+
+Settings also cover how many moments to recall, how many of the newest messages to leave out (the AI already sees them), the closest match needed, where the block goes in the prompt, and the heading the AI reads. `{{trivium_recall}}` writes the chat's recall anywhere a prompt holds it.
+
+## For extension authors: the engine
+
+- `window.__SIGMA_TRIVIUM__.db.open(namespace, { dim })`: a TauriTavern-compatible database handle (insert, link, search, searchAdvanced, TQL `query`, subgraph, Leiden clustering…).
+- Commands: `triviumdb.open`, `triviumdb.search`, `triviumdb.query`, `triviumdb.list-namespaces`, `triviumdb.status`, `triviumdb.seed-demo`, `triviumdb.recall-search`.
+- `{{trivium_recall::namespace::query}}` searches a namespace of your own from any prompt.
+- **Developer tools**, folded at the bottom of the Smart Recall view: the raw workbench (stats, hybrid search with stage timings, TQL console, graph traversal, CRUD) and the full API catalog.
+
+## Platforms
+
+Prebuilt N-API binaries in `native/`: Windows x64, Linux x64 / ARM64 (glibc, also `proot-distro`), macOS Apple Silicon.
+
+### Native Termux (`android-arm64`)
+
+TriviumDB is pure Rust, so it builds on the phone in about three minutes:
 
 ```bash
 bash extensions/installed/triviumdb/scripts/build-termux.sh
 ```
-This installs `rust` and `nodejs` if needed, compiles `libtriviumdb.so` (`--release --features nodejs`), places `triviumdb.android-arm64.node` into `native/`, and verifies the N-API binding.
+
+It installs only missing build tools (never upgrades Node.js, which would break Project Σ's `better-sqlite3`), builds `native/triviumdb.android-arm64.node`, and checks it loads. Restart Project Σ afterwards.
+
+## Tests
+
+```bash
+node --test test/triviumdb.test.mjs   # engine API, page boot, view/window/settings render
+node --test test/recall.test.mjs      # Smart Recall end to end against a mock embeddings server
+```

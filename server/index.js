@@ -7,6 +7,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { registerRecall, migrations as recallMigrations } from './recall.js';
+
+export const migrations = recallMigrations;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const NATIVE_DIR = path.resolve(__dirname, '..', 'native');
@@ -337,6 +340,13 @@ export function register(router, ctx) {
         entry.db.close();
         instances.delete(key);
         return { closed: true, namespace: ns };
+    }
+
+    /** Close a namespace and delete its files. */
+    function dropNamespace(userHandle, namespace) {
+        const ns = validateNamespace(namespace);
+        closeNamespace(userHandle, ns);
+        fs.rmSync(path.join(userRootDir(userHandle), `db-${ns}`), { recursive: true, force: true });
     }
 
     function listUserNamespaces(userHandle) {
@@ -784,7 +794,13 @@ export function register(router, ctx) {
         }
     });
 
-    // ---- Macro: {{trivium_recall::query}} or {{trivium_recall::namespace::query}} ----
+    // ---- Smart Recall: the library index, its search and the recall of a chat's older moments ----
+    const recall = registerRecall(router, ctx, {
+        openNamespace, getOpenInstance, dropNamespace, loadNativeAddon, textToDemoVector, sanitizeBigInt,
+    });
+
+    // ---- Macro: {{trivium_recall}} (this chat's Smart Recall), {{trivium_recall::query}} or
+    // {{trivium_recall::namespace::query}} (a search of a namespace of your own) ----
     ctx.macros.add('trivium_recall', {
         args: [
             { name: 'first', optional: true },
@@ -792,28 +808,23 @@ export function register(router, ctx) {
         ],
         handler: ({ db, user, chatId, unnamedArgs: [first, second] }) => {
             try {
+                if (!first && !second) {
+                    return chatId ? (recall.recallFor(db, user, chatId, { force: true })?.text || '') : '';
+                }
                 const { TriviumDB } = loadNativeAddon();
                 if (!TriviumDB) return '';
-
                 let ns = ctx.setting(db, 'recallNamespace') || 'playground';
                 let queryText = '';
-
                 if (first && second) {
                     ns = first.trim();
                     queryText = second.trim();
-                } else if (first) {
-                    queryText = first.trim();
-                } else if (chatId) {
-                    const rows = ctx.stores.chats.listMessageRows(db, chatId);
-                    const last = rows.at(-1)?.msg;
-                    queryText = last ? ctx.messages.shown(last) : '';
+                } else {
+                    queryText = String(first).trim();
                 }
-
                 if (!queryText) return '';
                 openNamespace(user, db, ns, {});
                 const entry = getOpenInstance(user, ns);
                 if (entry.db.nodeCount() === 0) return '';
-
                 const topK = Math.max(1, Math.min(20, Number(ctx.setting(db, 'recallTopK')) || 5));
                 const hits = executeOperation(entry, {
                     type: 'search',
@@ -830,61 +841,6 @@ export function register(router, ctx) {
                         return `- [${label}]: ${body}`;
                     })
                     .join('\n');
-            } catch {
-                return '';
-            }
-        },
-    });
-
-    // ---- Optional Prompt Block when injectPromptRecall is toggled on ----
-    ctx.prompt.addBlock({
-        id: 'recall',
-        position: 'pre_history',
-        role: 'system',
-        text: ({ db, user, chatId }) => {
-            if (!ctx.setting(db, 'injectPromptRecall')) return '';
-            try {
-                const { TriviumDB } = loadNativeAddon();
-                if (!TriviumDB) return '';
-                const ns = ctx.setting(db, 'recallNamespace') || 'playground';
-                const rows = ctx.stores.chats.listMessageRows(db, chatId);
-                const recentText = rows
-                    .slice(-3)
-                    .map(r => ctx.messages.shown(r.msg))
-                    .filter(Boolean)
-                    .join(' ');
-                if (!recentText) return '';
-
-                openNamespace(user, db, ns, {});
-                const entry = getOpenInstance(user, ns);
-                if (entry.db.nodeCount() === 0) return '';
-
-                const topK = Math.max(1, Math.min(20, Number(ctx.setting(db, 'recallTopK')) || 5));
-                const hits = executeOperation(entry, {
-                    type: 'search',
-                    vector: null,
-                    queryText: recentText.slice(0, 500),
-                    config: { topK, expandDepth: 1, minScore: 0 },
-                });
-                if (!Array.isArray(hits) || !hits.length) return '';
-
-                const lines = hits.map(h => {
-                    const p = h.payload || {};
-                    const label = p.name || p.title || `Node #${h.id}`;
-                    const body = p.text || p.content || JSON.stringify(p);
-                    return `- [${label}]: ${body}`;
-                });
-                const placement = ['pre_history', 'post_history', 'at_depth'].includes(ctx.setting(db, 'promptPlacement'))
-                    ? ctx.setting(db, 'promptPlacement')
-                    : 'pre_history';
-                const depth = Math.max(0, Number(ctx.setting(db, 'promptDepth')) || 2);
-
-                return {
-                    position: placement,
-                    depth,
-                    role: 'system',
-                    text: `[TriviumDB Knowledge Recall (${ns}):\n${lines.join('\n')}]`,
-                };
             } catch {
                 return '';
             }

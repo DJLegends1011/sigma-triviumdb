@@ -1,13 +1,483 @@
 /* SPDX-License-Identifier: 0BSD */
-/* TriviumDB Workbench & Conversation Window styling for Project Σ */
+/* TriviumDB Smart Recall for Project Σ: the view, the chat window, the settings and the developer workbench.
+   Laid out for a phone first: everything wraps, nothing is wider than its container. */
 
-.tdb-tour {
-    max-width: 1180px;
+/* ---------- the Smart Recall view ---------- */
+
+.tdb {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 880px;
     margin: 0 auto;
+    padding: var(--space-md) var(--space-md) var(--space-xl);
     display: flex;
     flex-direction: column;
-    gap: var(--space-lg);
-    padding-bottom: var(--space-xl);
+    gap: var(--space-md);
+    min-width: 0;
+}
+
+.tdb *,
+.tdb-win * {
+    box-sizing: border-box;
+    min-width: 0;
+}
+
+.tdb-hero-title {
+    margin: 0 0 var(--space-2xs);
+    font-size: var(--font-xl);
+    font-weight: 600;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+.tdb-hero-title i {
+    color: var(--accent);
+}
+
+.tdb-hero-lead {
+    margin: 0;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.tdb-searchbar {
+    position: relative;
+    display: flex;
+    gap: var(--space-sm);
+    align-items: stretch;
+}
+
+.tdb-searchbar-icon {
+    position: absolute;
+    left: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    pointer-events: none;
+}
+
+.tdb .tdb-searchbar input.tdb-searchbar-input {
+    flex: 1 1 auto;
+    width: 100%;
+    padding-left: 40px !important;
+    min-height: 44px;
+    font-size: var(--font-md, 1rem);
+}
+
+.tdb-searchbar-go {
+    flex: 0 0 auto;
+}
+
+.tdb-chips,
+.tdb-tries {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-xs);
+}
+
+.tdb-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--glass-border);
+    background: var(--cl-ghost-faint);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: var(--font-xs);
+    cursor: pointer;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    text-align: left;
+}
+
+.tdb-chip:hover {
+    color: var(--text-primary);
+    border-color: var(--accent);
+}
+
+.tdb-chip.is-on {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    border-color: var(--accent);
+    color: var(--text-primary);
+}
+
+.tdb-by {
+    margin-left: auto;
+    font-size: var(--font-2xs);
+    color: var(--text-muted);
+}
+
+.tdb-results {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+}
+
+.tdb-empty {
+    margin: var(--space-sm) 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+}
+
+.tdb-empty p {
+    margin: 0;
+}
+
+.tdb-steps {
+    margin: 0;
+    padding: var(--space-md) var(--space-md) var(--space-md) calc(var(--space-md) + 1.2em);
+    border-radius: var(--radius-lg);
+    border: 1px dashed var(--glass-border);
+    color: var(--text-secondary);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+    line-height: 1.5;
+}
+
+.tdb-steps strong {
+    color: var(--text-primary);
+}
+
+/* a result: a picture, who and where, the words around the match */
+.tdb-hit {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-sm);
+    width: 100%;
+    padding: var(--space-sm) var(--space-sm-md, 12px);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--glass-border);
+    background: var(--cl-ghost-faint);
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.tdb-hit:hover,
+.tdb-hit:focus-visible {
+    border-color: var(--accent);
+    background: var(--cl-ghost-soft);
+}
+
+.tdb-hit-avatar,
+.tdb-hit-icon {
+    flex: 0 0 40px;
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-sm);
+    object-fit: cover;
+}
+
+.tdb-hit-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--cl-ghost-soft);
+    color: var(--text-muted);
+}
+
+.tdb-hit-icon.is-lore {
+    color: var(--accent);
+}
+
+.tdb-hit-main {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.tdb-hit-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-xs);
+}
+
+.tdb-hit-name {
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tdb-hit-where {
+    font-size: var(--font-2xs);
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+
+.tdb-hit-text {
+    font-size: var(--font-xs);
+    color: var(--text-secondary);
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.tdb-hit-text mark {
+    background: color-mix(in srgb, var(--accent) 30%, transparent);
+    color: var(--text-primary);
+    border-radius: 2px;
+    padding: 0 1px;
+}
+
+.tdb-hit.is-compact {
+    padding: var(--space-xs) var(--space-sm);
+}
+
+.tdb-hit.is-compact .tdb-hit-avatar,
+.tdb-hit.is-compact .tdb-hit-icon {
+    flex-basis: 28px;
+    width: 28px;
+    height: 28px;
+}
+
+.tdb-hit.is-compact .tdb-hit-text {
+    -webkit-line-clamp: 3;
+}
+
+.tdb-pill {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: var(--font-2xs);
+    font-weight: 600;
+    background: var(--cl-ghost-soft);
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.tdb-pill.is-match {
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+    color: var(--text-primary);
+}
+
+/* the index's state and its verbs */
+.tdb-card {
+    padding: var(--space-md);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--glass-border);
+    background: var(--cl-ghost-soft);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+}
+
+.tdb-card p {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.tdb-card.is-warn {
+    border-color: color-mix(in srgb, var(--cl-warning, #f1c40f) 60%, transparent);
+}
+
+.tdb-status-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-sm);
+}
+
+.tdb-status-main {
+    flex: 1 1 260px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.tdb-status-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+}
+
+.tdb-status-line strong {
+    color: var(--text-primary);
+}
+
+.tdb-status-verbs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-xs);
+}
+
+.tdb-progress {
+    height: 6px;
+    border-radius: 999px;
+    background: var(--cl-ghost-faint);
+    overflow: hidden;
+}
+
+.tdb-progress span {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+    border-radius: inherit;
+    transition: width 0.4s ease;
+}
+
+.tdb-progress-note {
+    font-size: var(--font-2xs);
+}
+
+.tdb-dim {
+    color: var(--text-muted);
+    font-size: var(--font-xs);
+}
+
+.tdb-warn-text {
+    color: var(--cl-warning, #f1c40f);
+}
+
+/* the developer workbench, folded */
+.tdb-dev {
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--glass-border);
+    background: var(--cl-ghost-faint);
+}
+
+.tdb-dev > summary {
+    cursor: pointer;
+    padding: var(--space-sm) var(--space-md);
+    color: var(--text-secondary);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-xs);
+}
+
+.tdb-dev[open] > summary {
+    border-bottom: 1px solid var(--glass-border);
+}
+
+.tdb-dev > div {
+    padding: var(--space-md);
+}
+
+/* ---------- the chat window ---------- */
+
+.tdb-win {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+}
+
+.tdb-switch,
+.tdb label:has(> .cl-switch-input),
+.tdb-win label:has(> .cl-switch-input) {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    position: relative;
+}
+
+.tdb-win-scope {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-xs);
+}
+
+.tdb-win-scope .cl-select-fluid,
+.tdb-win-scope .cl-custom-select {
+    flex: 1 1 180px;
+}
+
+.tdb-win-hint,
+.tdb-win-foot {
+    margin: 0;
+    line-height: 1.45;
+}
+
+.tdb-win-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+}
+
+.tdb-win-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-xs);
+    font-size: var(--font-2xs);
+    letter-spacing: var(--tracking-ui);
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.tdb-win-search {
+    display: flex;
+    gap: var(--space-xs);
+}
+
+.tdb-win-search input {
+    flex: 1 1 auto;
+    width: 100%;
+}
+
+.tdb-win p {
+    margin: 0;
+}
+
+/* ---------- settings ---------- */
+
+.tdb-set-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-xs);
+}
+
+.tdb-set-row .glass-input {
+    flex: 1 1 200px;
+}
+
+.tdb-set-dev > summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+    padding: var(--space-xs) 0;
+}
+
+.tdb-num {
+    width: 96px;
+    max-width: 100%;
+}
+
+/* ---------- the developer workbench (dev.js) ---------- */
+
+.tdb-tour {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+    min-width: 0;
+}
+
+.tdb-tour * {
+    min-width: 0;
 }
 
 .tdb-header {
@@ -20,9 +490,10 @@
 
 .tdb-title {
     margin: 0 0 var(--space-2xs) 0;
-    font-size: var(--font-xl);
+    font-size: var(--font-lg, 1.1rem);
     font-weight: 600;
     color: var(--text-primary);
+    overflow-wrap: anywhere;
 }
 
 .tdb-line {
@@ -31,7 +502,8 @@
     overflow-wrap: anywhere;
 }
 
-.tdb-line.is-error {
+.tdb-line.is-error,
+.tdb-line .is-error {
     color: var(--cl-error);
 }
 
@@ -39,11 +511,12 @@
     margin: 0;
     font-size: var(--font-xs);
     color: var(--text-muted);
+    overflow-wrap: anywhere;
 }
 
 .tdb-tiles {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(130px, 100%), 1fr));
     gap: var(--space-sm);
 }
 
@@ -51,19 +524,19 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2xs);
-    padding: var(--space-md) var(--space-sm-md);
+    padding: var(--space-sm) var(--space-sm-md, 12px);
     border-radius: var(--radius-md);
     background: var(--cl-ghost-soft);
     border: 1px solid var(--glass-border);
-    min-width: 0;
 }
 
 .tdb-tile-value {
-    font-size: var(--font-xl);
+    font-size: var(--font-lg, 1.1rem);
     font-weight: 600;
     color: var(--text-primary);
     font-variant-numeric: tabular-nums;
     line-height: 1.15;
+    overflow-wrap: anywhere;
 }
 
 .tdb-tile-label {
@@ -75,19 +548,18 @@
 
 .tdb-pair {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
-    gap: var(--space-lg);
+    grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr));
+    gap: var(--space-md);
 }
 
 .tdb-panel {
     display: flex;
     flex-direction: column;
-    gap: var(--space-sm-md);
+    gap: var(--space-sm);
     padding: var(--space-md);
     border-radius: var(--radius-lg);
     background: var(--cl-ghost-soft);
     border: 1px solid var(--glass-border);
-    min-width: 0;
 }
 
 .tdb-heading {
@@ -97,19 +569,21 @@
     letter-spacing: var(--tracking-ui);
     text-transform: uppercase;
     color: var(--text-muted);
+    overflow-wrap: anywhere;
+    line-height: 1.4;
 }
 
 .tdb-verbs {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--space-sm);
+    gap: var(--space-xs);
 }
 
 .tdb-row {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: var(--space-sm);
+    gap: var(--space-xs);
 }
 
 .tdb-between {
@@ -118,11 +592,6 @@
 
 .tdb-flex {
     flex: 1 1 160px;
-    min-width: 0;
-}
-
-.tdb-num {
-    width: 72px;
 }
 
 .tdb-check {
@@ -132,9 +601,11 @@
     font-size: var(--font-xs);
     color: var(--text-secondary);
     cursor: pointer;
+    position: relative;
 }
 
 .tdb-code {
+    width: 100%;
     font-family: var(--font-mono, monospace);
     font-size: var(--font-xs);
 }
@@ -166,7 +637,7 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2xs);
-    padding: var(--space-xs-sm) var(--space-sm);
+    padding: var(--space-xs) var(--space-sm);
     border-radius: var(--radius-sm);
     background: var(--cl-ghost-faint);
     border: 1px solid var(--glass-border);
@@ -174,6 +645,7 @@
 
 .tdb-hit-head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: var(--space-xs);
@@ -191,40 +663,7 @@
     margin: 0;
     font-size: var(--font-xs);
     color: var(--text-secondary);
-}
-
-.tdb-win {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-sm);
-}
-
-.tdb-win-results {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-xs);
-    max-height: 260px;
-    overflow: auto;
-}
-
-.tdb-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2xs);
-    padding: 2px 8px;
-    border-radius: var(--radius-sm);
-    font-size: var(--font-2xs);
-    font-weight: 600;
-}
-
-.tdb-badge.is-ok {
-    background: rgba(46, 204, 113, 0.14);
-    color: #2ecc71;
-}
-
-.tdb-badge.is-warn {
-    background: rgba(241, 196, 15, 0.16);
-    color: #f1c40f;
+    overflow-wrap: anywhere;
 }
 
 .tdb-doors summary {
@@ -232,18 +671,48 @@
     color: var(--text-primary);
     font-size: var(--font-sm);
     padding: var(--space-2xs) 0;
+    overflow-wrap: anywhere;
 }
 
 .tdb-door-list {
     margin: var(--space-xs) 0 var(--space-sm);
-    padding-left: var(--space-lg);
+    padding-left: var(--space-md);
     display: flex;
     flex-direction: column;
     gap: var(--space-2xs);
     font-size: var(--font-xs);
+    overflow-wrap: anywhere;
+}
+
+.tdb-door-list code {
+    white-space: normal;
+    overflow-wrap: anywhere;
 }
 
 .tdb-type {
     color: var(--text-muted);
     overflow-wrap: anywhere;
+}
+
+@media (max-width: 520px) {
+    .tdb {
+        padding: var(--space-sm) var(--space-sm) var(--space-xl);
+    }
+
+    .tdb-hero-title {
+        font-size: var(--font-lg, 1.15rem);
+    }
+
+    .tdb-searchbar-go {
+        padding-inline: 12px;
+    }
+
+    .tdb-status-verbs {
+        width: 100%;
+    }
+
+    .tdb-status-verbs .cl-btn {
+        flex: 1 1 auto;
+        justify-content: center;
+    }
 }

@@ -1,805 +1,617 @@
 // SPDX-License-Identifier: 0BSD
-// TriviumDB for Project Σ — Client Half:
-// 1. Exposes `window.__SIGMA_TRIVIUM__.db` (and `window.__TAURITAVERN__.api.db` compatibility shim)
-// 2. Registers `triviumdb.*` commands on `ctx.commands` so other Project Σ extensions can invoke TriviumDB
-// 3. Contributes the TriviumDB Workbench & Tour (`shell.view` + `app.action`) and Conversation Window (`chat.window`)
+// TriviumDB for Project Σ — the client half:
+// 1. Smart Recall: a view that finds any moment of the library's chats and lorebooks by meaning, a chat window
+//    that turns on the recall of a chat's older moments into its prompt, and the settings.
+// 2. The engine for other extensions: window.__SIGMA_TRIVIUM__.db and the triviumdb.* commands.
+// 3. The developer workbench, folded away at the bottom of the view.
 
-const ID = 'triviumdb';
-const VIEW = 'ext:triviumdb/workbench';
+import { createTriviumClientApi, why } from './api.js';
+import { mountDevTools } from './dev.js';
 
-/** @param {unknown} e */
-const why = (e) => (e instanceof Error ? e.message : String(e));
-
-/**
- * Build the TauriTavern-compatible `db` API object backed by Project Σ's `/api/ext/triviumdb/handle` route.
- * @param {(path: string, method?: string, body?: any) => Promise<any>} call
- */
-function createTriviumClientApi(call) {
-    const invokeHandle = async (request) => {
-        const res = await call('/handle', 'POST', { request });
-        return request.type === 'execute' ? res.result : res;
-    };
-
-    return Object.freeze({
-        async open(namespace, options = {}) {
-            const opened = await invokeHandle({ type: 'open', namespace, options });
-            const exec = (operation) => invokeHandle({ type: 'execute', namespace, operation });
-
-            const handle = {
-                namespace: opened.namespace,
-                dim: opened.dim,
-                options: Object.freeze({ ...(opened.options || {}) }),
-                insert: (vector, payload = null) => exec({ type: 'insert', vector, payload }),
-                batchInsert: (vectors, payloads) => exec({ type: 'batchInsert', vectors, payloads }),
-                upsert: (id, vector, payload = null) => exec({ type: 'upsert', id, vector, payload }),
-                get: (id) => exec({ type: 'get', id }),
-                updatePayload: (id, payload) => exec({ type: 'updatePayload', id, payload }),
-                patchPayload: (id, patch) => exec({ type: 'patchPayload', id, patch }),
-                updateVector: (id, vector) => exec({ type: 'updateVector', id, vector }),
-                delete: (id) => exec({ type: 'delete', id }),
-                link: (src, dst, label = 'related', weight = 1) => exec({ type: 'link', src, dst, label, weight }),
-                unlink: (src, dst, label) => exec({ type: 'unlink', src, dst, label }),
-                shortestPath: (source, target, opts = {}) => exec({ type: 'shortestPath', source, target, ...opts }),
-                subgraph: (id, opts = {}) => exec({ type: 'subgraph', id, ...opts }),
-                indexText: (id, text) => exec({ type: 'indexText', id, text }),
-                indexKeyword: (id, keyword) => exec({ type: 'indexKeyword', id, keyword }),
-                buildTextIndex: () => exec({ type: 'buildTextIndex' }),
-                search: (vector = null, opts = {}) => {
-                    const { queryText, filter, ...config } = opts || {};
-                    return exec({
-                        type: 'search',
-                        vector,
-                        queryText,
-                        config: {
-                            ...config,
-                            payloadFilter: config.payloadFilter ?? filter,
-                        },
-                    });
-                },
-                searchBatch: (vectors, opts = {}) => {
-                    const { parallelism, ...config } = opts || {};
-                    return exec({ type: 'searchBatch', vectors, parallelism, config });
-                },
-                searchAdvanced: (vector = null, opts = {}) => {
-                    const { queryText, ...config } = opts || {};
-                    return exec({ type: 'searchAdvanced', vector, queryText, config });
-                },
-                query: (query, params = {}) => exec({ type: 'query', query, params }),
-                leidenCluster: (config = {}) => exec({ type: 'leidenCluster', config }),
-                createIndex: (field) => exec({ type: 'createIndex', field }),
-                dropIndex: (field) => exec({ type: 'dropIndex', field }),
-                indexInfo: () => exec({ type: 'indexInfo' }),
-                validateGraph: () => exec({ type: 'validateGraph' }),
-                repairGraph: () => exec({ type: 'repairGraph' }),
-                buildQuiverIndex: () => exec({ type: 'buildQuiverIndex' }),
-                compact: () => exec({ type: 'compact' }),
-                flush: () => exec({ type: 'flush' }),
-                close: () => invokeHandle({ type: 'close', namespace }),
-                stats: () => exec({ type: 'stats' }),
-            };
-            return Object.freeze(handle);
-        },
-        listNamespaces: () => invokeHandle({ type: 'listNamespaces' }),
-        flushAll: () => invokeHandle({ type: 'flushAll' }),
-        status: () => call('/status', 'GET'),
-        seedDemo: (namespace = 'playground', reset = true) => call('/seed-demo', 'POST', { namespace, reset }),
-    });
-}
-
-function formatBytes(bytes) {
-    const n = Number(bytes) || 0;
-    if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-    return `${(n / (1024 * 1024)).toFixed(2)} MB`;
-}
+const VIEW = 'ext:triviumdb/recall';
+const POLL_MS = 1500;
+const PRIME_WAIT_MS = 4000;
+const STOP = new Set('a an and are as at be but by for from had has have he her his i if in into is it its me my no not of on or our she so that the their them then there they this to was we were what when where which who will with you your'.split(' '));
 
 /** @type {import('../../../../docs/extensions').ClientExtension} */
 export default {
     init(ctx) {
-        const CoreAPI = ctx.CoreAPI;
-        const esc = (s) => CoreAPI.escapeHtml(s);
+        const { CoreAPI } = ctx;
+        const esc = (s) => CoreAPI.escapeHtml(String(s ?? ''));
         const call = ctx.server.call;
         const dbApi = createTriviumClientApi(call);
 
-        // Install global handle for Project Σ extensions in the WebView
+        // ---- the engine for other extensions ----
         if (typeof window !== 'undefined') {
             window.__SIGMA_TRIVIUM__ = Object.freeze({ db: dbApi, version: '0.9.0' });
         }
-
-        // ---- Register cross-extension Project Σ commands ----
         ctx.commands.register('open', ({ namespace = 'playground', options = {} } = {}) => dbApi.open(namespace, options), {
             title: 'Open a TriviumDB namespace handle',
         });
-        ctx.commands.register('list-namespaces', () => dbApi.listNamespaces(), {
-            title: 'List open TriviumDB namespaces',
-        });
-        ctx.commands.register('status', () => dbApi.status(), {
-            title: 'Get TriviumDB engine status',
-        });
+        ctx.commands.register('list-namespaces', () => dbApi.listNamespaces(), { title: 'List open TriviumDB namespaces' });
+        ctx.commands.register('status', () => dbApi.status(), { title: 'Get TriviumDB engine status' });
         ctx.commands.register('seed-demo', ({ namespace = 'playground', reset = true } = {}) => dbApi.seedDemo(namespace, reset), {
             title: 'Seed the TriviumDB playground knowledge graph',
         });
         ctx.commands.register('query', async ({ namespace = 'playground', query = 'MATCH (n) RETURN n', params = {}, dim } = {}) => {
             const db = await dbApi.open(namespace, dim ? { dim } : {});
             return db.query(query, params);
-        }, {
-            title: 'Execute a TQL query or mutation on a TriviumDB namespace',
-        });
+        }, { title: 'Execute a TQL query or mutation on a TriviumDB namespace' });
         ctx.commands.register('search', async ({ namespace = 'playground', vector = null, queryText = '', topK = 5, expandDepth = 1, advanced = false, dim } = {}) => {
             const db = await dbApi.open(namespace, dim ? { dim } : {});
             return advanced
                 ? db.searchAdvanced(vector, { queryText, topK, expandDepth })
                 : db.search(vector, { queryText, topK, expandDepth });
-        }, {
-            title: 'Search a TriviumDB namespace (vector + BM25 + graph diffusion)',
+        }, { title: 'Search a TriviumDB namespace (vector + BM25 + graph diffusion)' });
+        ctx.commands.register('recall-search', ({ q = '', scope = 'all', chatId, charId, limit = 20 } = {}) => call('/recall/search', 'POST', { q, scope, chatId, charId, limit }), {
+            title: 'Search the Smart Recall index of chats and lorebooks',
         });
 
-        // ---- App Action Menu item to switch to the Workbench ----
-        ctx.ui.contribute('app.action', {
-            id: 'workbench',
-            label: 'TriviumDB Workbench',
-            icon: 'fa-diagram-project',
-            when: ({ view }) => view !== VIEW,
-            run: async () => {
-                await ctx.commands.run('view.switch', { view: VIEW });
-            },
-        });
-
-        // ---- Extension Settings Section ----
-        ctx.ui.addSettingsSection(async (el) => {
-            let statusInfo = null;
-            try {
-                statusInfo = await dbApi.status();
-            } catch { /* handled below */ }
-
-            const on = (key) => (ctx.settings.get(key) ? ' checked' : '');
-            const syncMode = ctx.settings.get('defaultSyncMode') || 'normal';
-            const placement = ctx.settings.get('promptPlacement') || 'pre_history';
-
-            el.innerHTML = `
-                <div class="settings-row">
-                    <label>Default Vector Dimension</label>
-                    <input type="number" class="glass-input" data-tdb-set="defaultDim" min="1" max="8192" value="${esc(ctx.settings.get('defaultDim') ?? 1536)}">
-                    <span class="settings-hint">Used when opening a brand-new namespace without an explicit dim option.</span>
-                </div>
-                <div class="settings-row">
-                    <label>Default WAL Sync Mode</label>
-                    <select class="cl-select-fluid" data-tdb-set="defaultSyncMode">
-                        <option value="normal"${syncMode === 'normal' ? ' selected' : ''}>normal (Balanced WAL)</option>
-                        <option value="full"${syncMode === 'full' ? ' selected' : ''}>full (Fsync every write)</option>
-                        <option value="off"${syncMode === 'off' ? ' selected' : ''}>off (In-memory speed)</option>
-                    </select>
-                </div>
-                <div class="settings-row">
-                    <label>Default Recall Namespace</label>
-                    <input type="search" autocomplete="one-time-code" class="glass-input" data-tdb-set="recallNamespace" maxlength="128" value="${esc(ctx.settings.get('recallNamespace') || 'playground')}">
-                    <span class="settings-hint">Used by the <code>{{trivium_recall}}</code> macro and automatic prompt recall.</span>
-                </div>
-                <div class="settings-row">
-                    <label>Recall Top-K</label>
-                    <input type="number" class="glass-input" data-tdb-set="recallTopK" min="1" max="20" value="${esc(ctx.settings.get('recallTopK') ?? 5)}">
-                </div>
-                <div class="settings-row">
-                    <label><input type="checkbox" class="cl-switch-input" data-tdb-set="injectPromptRecall"${on('injectPromptRecall')}><span class="cl-switch" aria-hidden="true"></span> Auto-inject knowledge recall block into chat prompts</label>
-                    <span class="settings-hint">Queries the default namespace using the latest chat messages and injects top hits.</span>
-                </div>
-                <div class="settings-row">
-                    <label>Prompt Block Placement</label>
-                    <select class="cl-select-fluid" data-tdb-set="promptPlacement">
-                        <option value="pre_history"${placement === 'pre_history' ? ' selected' : ''}>Before the conversation (pre_history)</option>
-                        <option value="post_history"${placement === 'post_history' ? ' selected' : ''}>After the conversation (post_history)</option>
-                        <option value="at_depth"${placement === 'at_depth' ? ' selected' : ''}>Inside the conversation (at_depth)</option>
-                    </select>
-                </div>
-                <div class="settings-row" data-tdb-depth-row${placement === 'at_depth' ? '' : ' hidden'}>
-                    <label>Messages back from the newest</label>
-                    <input type="number" class="glass-input" data-tdb-set="promptDepth" min="0" max="50" value="${esc(ctx.settings.get('promptDepth') ?? 2)}">
-                </div>
-                <p class="settings-hint">
-                    ${statusInfo?.ok
-                        ? `Native Engine: <strong>TriviumDB v${esc(statusInfo.version)}</strong> active (<code>${esc(statusInfo.binary)}</code> on ${esc(statusInfo.platform)}-${esc(statusInfo.arch)}).`
-                        : `Native Engine not built for this platform yet: ${esc(statusInfo?.nativeError || 'unavailable')}. On Termux run <code>bash extensions/installed/triviumdb/scripts/build-termux.sh</code>.`}
-                </p>`;
-
-            const depthRow = el.querySelector('[data-tdb-depth-row]');
-            const fields = el.querySelectorAll('[data-tdb-set]');
-            for (const input of fields) {
-                input.addEventListener('change', () => {
-                    const key = input.dataset.tdbSet || '';
-                    if (input.type === 'checkbox') {
-                        ctx.settings.set(key, input.checked);
-                    } else if (input.type === 'number') {
-                        ctx.settings.set(key, Number(input.value) || ctx.settings.defaults[key]);
-                    } else {
-                        ctx.settings.set(key, input.value.trim() || ctx.settings.defaults[key]);
-                    }
-                    if (key === 'promptPlacement' && depthRow) {
-                        depthRow.hidden = input.value !== 'at_depth';
-                    }
-                });
-            }
-            for (const sel of el.querySelectorAll('select.cl-select-fluid')) {
-                CoreAPI.initCustomSelect?.(sel);
-            }
-        });
-
-        // ---- Conversation Window (`chat.window`) ----
-        let winState = null;
-        const paintChatWindow = async () => {
-            if (!winState) return;
-            const { el } = winState;
-            const ns = ctx.settings.get('recallNamespace') || 'playground';
-            let statusInfo = null;
-            try {
-                statusInfo = await dbApi.status();
-            } catch (e) {
-                el.innerHTML = `<div class="tdb-win"><p class="tdb-line is-error">Engine error: ${esc(why(e))}</p></div>`;
-                return;
-            }
-
-            el.innerHTML = `
-                <div class="tdb-win">
-                    <div class="tdb-row tdb-between">
-                        <span class="tdb-badge ${statusInfo?.ok ? 'is-ok' : 'is-warn'}">
-                            <i class="fa-solid fa-database" aria-hidden="true"></i>
-                            ${statusInfo?.ok ? `TriviumDB v${esc(statusInfo.version)}` : 'Addon Missing'}
-                        </span>
-                        <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdb-win="open-workbench">
-                            <i class="fa-solid fa-up-right-from-square" aria-hidden="true"></i> Workbench
-                        </button>
-                    </div>
-                    <div class="tdb-row">
-                        <input type="search" class="glass-input tdb-flex" data-tdb-win-ns value="${esc(ns)}" placeholder="Namespace (e.g. playground)">
-                        <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdb-win="seed" title="Seed demo graph">
-                            <i class="fa-solid fa-seedling" aria-hidden="true"></i> Seed
-                        </button>
-                    </div>
-                    <div class="tdb-row">
-                        <input type="search" class="glass-input tdb-flex" data-tdb-win-q placeholder="Hybrid search or keyword (e.g. Obsidian Cipher)...">
-                        <button type="button" class="cl-btn cl-btn-primary cl-btn-sm" data-tdb-win="search">
-                            <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
-                        </button>
-                    </div>
-                    <div class="tdb-win-results" data-tdb-win-results>
-                        <p class="tdb-note">Tip: Use <code>{{trivium_recall::Obsidian Cipher}}</code> in any prompt or message, or click Seed to load the sample cyberpunk knowledge graph.</p>
-                    </div>
-                </div>`;
-
-            const nsInput = /** @type {HTMLInputElement} */ (el.querySelector('[data-tdb-win-ns]'));
-            const qInput = /** @type {HTMLInputElement} */ (el.querySelector('[data-tdb-win-q]'));
-            const outBox = /** @type {HTMLElement} */ (el.querySelector('[data-tdb-win-results]'));
-
-            const runWinSearch = async () => {
-                const targetNs = nsInput.value.trim() || 'playground';
-                const q = qInput.value.trim();
-                outBox.innerHTML = '<p class="tdb-note">Searching...</p>';
-                try {
-                    const db = await dbApi.open(targetNs);
-                    const res = await db.searchAdvanced(null, { queryText: q || 'Alice', topK: 5, expandDepth: 1 });
-                    if (!res.hits?.length) {
-                        outBox.innerHTML = '<p class="tdb-note">No hits found in this namespace. Try clicking Seed first.</p>';
-                        return;
-                    }
-                    outBox.innerHTML = res.hits.map(h => {
-                        const p = h.payload || {};
-                        return `<div class="tdb-hit-card">
-                            <div class="tdb-hit-head">
-                                <strong>#${esc(h.id)} ${esc(p.name || p.title || 'Node')}</strong>
-                                <span class="tdb-score">score ${Number(h.score).toFixed(2)}</span>
-                            </div>
-                            <p class="tdb-hit-body">${esc(p.text || JSON.stringify(p))}</p>
-                        </div>`;
-                    }).join('');
-                } catch (err) {
-                    outBox.innerHTML = `<p class="tdb-line is-error">${esc(why(err))}</p>`;
-                }
-            };
-
-            el.addEventListener('click', async (ev) => {
-                const act = /** @type {HTMLElement | null} */ (/** @type {Element} */ (ev.target).closest('[data-tdb-win]'))?.dataset.tdbWin;
-                if (act === 'open-workbench') {
-                    await ctx.commands.run('view.switch', { view: VIEW });
-                } else if (act === 'seed') {
-                    const targetNs = nsInput.value.trim() || 'playground';
-                    outBox.innerHTML = '<p class="tdb-note">Seeding demo knowledge graph...</p>';
-                    try {
-                        const seeded = await dbApi.seedDemo(targetNs, true);
-                        CoreAPI.showToast(`Seeded ${seeded.stats?.nodeCount ?? 5} nodes & ${seeded.stats?.graph?.edgeCount ?? 7} edges into "${targetNs}"`, 'success');
-                        await runWinSearch();
-                    } catch (err) {
-                        outBox.innerHTML = `<p class="tdb-line is-error">${esc(why(err))}</p>`;
-                    }
-                } else if (act === 'search') {
-                    await runWinSearch();
-                }
-            });
-
-            qInput.addEventListener('keydown', (ev) => {
-                if (ev.key === 'Enter') void runWinSearch();
-            });
+        // ---- shared bits ----
+        const fmtNum = (n) => Number(n || 0).toLocaleString();
+        const fmtDate = (at) => {
+            if (!at) return '';
+            const d = new Date(typeof at === 'number' || /^\d+$/.test(String(at)) ? Number(at) : String(at).replace(/(\d)(am|pm)$/i, '$1 $2'));
+            return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
         };
+        const termsOf = (q) => [...new Set((String(q || '').toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}'_-]*/gu) || []).filter(w => w.length > 2 && !STOP.has(w)))].slice(0, 12);
+        /** The part of a text around its first matching word, escaped, with the words marked. */
+        function snippetHtml(text, q, max = 320) {
+            const raw = String(text || '');
+            const terms = termsOf(q);
+            let start = 0;
+            if (terms.length) {
+                const lower = raw.toLowerCase();
+                const at = Math.min(...terms.map(t => { const i = lower.indexOf(t); return i < 0 ? Infinity : i; }));
+                if (Number.isFinite(at) && at > max * 0.4) start = Math.max(0, at - Math.floor(max * 0.3));
+            }
+            let cut = raw.slice(start, start + max);
+            if (start > 0) cut = `…${cut.replace(/^\S*\s/, '')}`;
+            if (start + max < raw.length) cut = `${cut.replace(/\s\S*$/, '')}…`;
+            let html = esc(cut);
+            if (terms.length) {
+                const re = new RegExp(`(${terms.map(t => esc(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'giu');
+                html = html.replace(re, '<mark>$1</mark>');
+            }
+            return html;
+        }
+        const avatarOf = (charId) => {
+            try { return charId ? (CoreAPI.getCharacterAvatarSmallThumbUrl?.(charId) || '') : ''; } catch { return ''; }
+        };
+        async function openHit(h) {
+            try {
+                if (h.src === 'lore') await ctx.commands.run('lorebook.open', { name: h.world, uid: h.uid });
+                else await ctx.chats.open(h.chatId, { messageId: h.messageId, seq: h.seq });
+            } catch (e) {
+                CoreAPI.showToast(`Could not open it: ${why(e)}`, 'error');
+            }
+        }
+        function hitHtml(h, q, ref, { compact = false } = {}) {
+            const match = h.match === null || h.match === undefined
+                ? (h.words ? '<span class="tdb-pill" title="Matched your words">words</span>' : '')
+                : `<span class="tdb-pill is-match" title="How close in meaning">${esc(h.match)}%</span>`;
+            const max = compact ? 180 : 320;
+            if (h.src === 'lore') {
+                return `<button type="button" class="tdb-hit${compact ? ' is-compact' : ''}" data-tdb-hit="${esc(ref)}">
+                    <span class="tdb-hit-icon is-lore" aria-hidden="true"><i class="fa-solid fa-book-atlas"></i></span>
+                    <span class="tdb-hit-main">
+                        <span class="tdb-hit-top"><strong class="tdb-hit-name">${esc(h.title)}</strong>${match}</span>
+                        <span class="tdb-hit-where">Lorebook · ${esc(h.world)}${h.off ? ' · off' : ''}</span>
+                        <span class="tdb-hit-text">${snippetHtml(h.text, q, max)}</span>
+                    </span>
+                </button>`;
+            }
+            const img = avatarOf(h.charId);
+            const pic = h.user
+                ? '<span class="tdb-hit-icon" aria-hidden="true"><i class="fa-solid fa-user"></i></span>'
+                : img ? `<img class="tdb-hit-avatar" src="${esc(img)}" alt="" loading="lazy">` : '<span class="tdb-hit-icon" aria-hidden="true"><i class="fa-solid fa-comment"></i></span>';
+            const where = [h.chat ? `“${h.chat}”` : '', `#${h.seq}`, fmtDate(h.at)].filter(Boolean).join(' · ');
+            return `<button type="button" class="tdb-hit${compact ? ' is-compact' : ''}" data-tdb-hit="${esc(ref)}">
+                ${pic}
+                <span class="tdb-hit-main">
+                    <span class="tdb-hit-top"><strong class="tdb-hit-name">${esc(h.name)}</strong>${match}</span>
+                    <span class="tdb-hit-where">${h.char && !h.user ? `${esc(h.char)} · ` : ''}${esc(where)}</span>
+                    <span class="tdb-hit-text">${snippetHtml(h.text, q, max)}</span>
+                </span>
+            </button>`;
+        }
+        const engineHint = (st) => `TriviumDB's engine is not built for this device (${esc(st?.engine?.platform || '')}).`
+            + ' On Termux, run <code>bash extensions/installed/triviumdb/scripts/build-termux.sh</code> and restart Project Σ.';
 
-        ctx.ui.addChatWindow({
-            id: 'inspector',
-            label: 'TriviumDB',
-            icon: 'fa-diagram-project',
-            min: { w: 24, h: 26 },
-            render(el, { chatId, character }) {
-                winState = { el, chatId, character };
-                void paintChatWindow();
-            },
-            onOpen({ chatId, character }) {
-                if (!winState) return;
-                winState.chatId = chatId;
-                winState.character = character;
-                void paintChatWindow();
-            },
-            onClose() {
-                winState = null;
-            },
+        // ---- the menu door and the view ----
+        ctx.ui.contribute('app.action', {
+            id: 'recall',
+            label: 'Smart Recall',
+            icon: 'fa-clock-rotate-left',
+            when: ({ view }) => view !== VIEW,
+            run: () => ctx.commands.run('view.switch', { view: VIEW }),
         });
 
-        // ---- Shell View (`shell.view`): Interactive TriviumDB Workbench & API Tour ----
-        let workbench = null;
+        let page = null;
         ctx.ui.contribute('shell.view', {
-            id: 'workbench',
-            label: 'TriviumDB',
-            icon: 'fa-diagram-project',
-            render(el) {
-                workbench = mountWorkbench(el);
-            },
-            enter: () => workbench?.enter(),
-            leave: () => workbench?.leave(),
-            refresh: () => workbench?.refresh(),
+            id: 'recall',
+            label: 'Smart Recall',
+            icon: 'fa-clock-rotate-left',
+            render(el) { page = mountView(el); },
+            enter: () => page?.enter(),
+            leave: () => page?.leave(),
+            refresh: () => page?.refresh(),
         });
 
-        function mountWorkbench(el) {
-            let activeNs = 'playground';
-            let shown = false;
-
+        function mountView(el) {
             el.innerHTML = `
-                <div class="tdb-tour">
-                    <div class="tdb-header">
-                        <div>
-                            <h2 class="tdb-title">TriviumDB Workbench & Extension API Tour</h2>
-                            <p class="tdb-line" data-tdb-lead>Loading native engine telemetry...</p>
-                        </div>
-                        <div class="tdb-verbs">
-                            <button type="button" class="cl-btn cl-btn-primary cl-btn-sm" data-tdb-act="seed">
-                                <i class="fa-solid fa-seedling" aria-hidden="true"></i> Seed Demo Graph
-                            </button>
-                            <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdb-act="flush">
-                                <i class="fa-solid fa-floppy-disk" aria-hidden="true"></i> Flush WAL
-                            </button>
-                            <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdb-act="refresh">
-                                <i class="fa-solid fa-rotate" aria-hidden="true"></i> Refresh Stats
-                            </button>
-                        </div>
+                <div class="tdb">
+                    <header class="tdb-hero">
+                        <h2 class="tdb-hero-title"><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i> Smart Recall</h2>
+                        <p class="tdb-hero-lead">Find any moment from your chats and lorebooks by what it meant, not the exact words. Turn it on in a chat and the AI remembers the moments that matter, too.</p>
+                    </header>
+                    <form class="tdb-searchbar" data-tdb-form>
+                        <i class="fa-solid fa-magnifying-glass tdb-searchbar-icon" aria-hidden="true"></i>
+                        <input type="search" class="glass-input tdb-searchbar-input" data-tdb-q autocomplete="off" enterkeyhint="search"
+                            placeholder="e.g. the night she told me about her brother">
+                        <button type="submit" class="cl-btn cl-btn-primary tdb-searchbar-go">Search</button>
+                    </form>
+                    <div class="tdb-chips" role="radiogroup" aria-label="Search in">
+                        <button type="button" class="tdb-chip is-on" data-tdb-scope="all" role="radio" aria-checked="true">Everything</button>
+                        <button type="button" class="tdb-chip" data-tdb-scope="chats" role="radio" aria-checked="false"><i class="fa-solid fa-comments" aria-hidden="true"></i> Chats</button>
+                        <button type="button" class="tdb-chip" data-tdb-scope="lore" role="radio" aria-checked="false"><i class="fa-solid fa-book-atlas" aria-hidden="true"></i> Lorebooks</button>
+                        <span class="tdb-by" data-tdb-by></span>
                     </div>
-
-                    <div class="tdb-tiles" data-tdb-tiles></div>
-
-                    <div class="tdb-pair">
-                        <section class="tdb-panel">
-                            <h3 class="tdb-heading">1. Hybrid Search & Cognitive Pipeline (Vector + BM25 + Graph Walk)</h3>
-                            <div class="tdb-row">
-                                <input type="search" class="glass-input tdb-flex" data-tdb-search-q value="Obsidian Cipher" placeholder="Search text or keywords...">
-                                <label class="tdb-check"><input type="checkbox" class="cl-switch-input" data-tdb-search-adv checked><span class="cl-switch" aria-hidden="true"></span> Advanced Pipeline</label>
-                                <button type="button" class="cl-btn cl-btn-primary cl-btn-sm" data-tdb-act="search">
-                                    <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> Search
-                                </button>
-                            </div>
-                            <div class="tdb-output" data-tdb-search-out>
-                                <p class="tdb-note">Click "Seed Demo Graph" then run a search to inspect hybrid hits and stage timings.</p>
-                            </div>
-                        </section>
-
-                        <section class="tdb-panel">
-                            <h3 class="tdb-heading">2. TQL Console (Cypher Graph + Document Filter + Vector Query)</h3>
-                            <div class="tdb-verbs">
-                                <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdb-preset="match-all">MATCH All Nodes</button>
-                                <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdb-preset="find-char">FIND Characters</button>
-                                <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdb-preset="create-node">CREATE Node</button>
-                            </div>
-                            <textarea class="glass-input tdb-code" rows="3" data-tdb-tql-input>MATCH (n) RETURN n</textarea>
-                            <div class="tdb-row tdb-between">
-                                <span class="tdb-note">Supports <code>MATCH</code>, <code>FIND</code>, <code>SEARCH VECTOR</code>, and <code>CREATE</code></span>
-                                <button type="button" class="cl-btn cl-btn-primary cl-btn-sm" data-tdb-act="run-tql">
-                                    <i class="fa-solid fa-play" aria-hidden="true"></i> Execute TQL
-                                </button>
-                            </div>
-                            <pre class="tdb-pre" data-tdb-tql-out>// TQL output will appear here</pre>
-                        </section>
-                    </div>
-
-                    <div class="tdb-pair">
-                        <section class="tdb-panel">
-                            <h3 class="tdb-heading">3. Knowledge Graph Traversal (Subgraph & Shortest Path)</h3>
-                            <div class="tdb-row">
-                                <label class="tdb-note">Root ID</label>
-                                <input type="number" class="glass-input tdb-num" data-tdb-graph-root value="1" min="1">
-                                <label class="tdb-note">Target ID</label>
-                                <input type="number" class="glass-input tdb-num" data-tdb-graph-target value="4" min="1">
-                                <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdb-act="subgraph">
-                                    <i class="fa-solid fa-project-diagram" aria-hidden="true"></i> Subgraph
-                                </button>
-                                <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdb-act="shortest-path">
-                                    <i class="fa-solid fa-route" aria-hidden="true"></i> Shortest Path
-                                </button>
-                                <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdb-act="leiden">
-                                    <i class="fa-solid fa-circle-nodes" aria-hidden="true"></i> Leiden Clusters
-                                </button>
-                            </div>
-                            <pre class="tdb-pre" data-tdb-graph-out>// Graph traversal output will appear here</pre>
-                        </section>
-
-                        <section class="tdb-panel">
-                            <h3 class="tdb-heading">4. Node & Edge CRUD + Secondary Property Indexes</h3>
-                            <div class="tdb-row">
-                                <input type="search" class="glass-input tdb-flex" data-tdb-crud-name value="Viktor" placeholder="Node name">
-                                <input type="search" class="glass-input tdb-flex" data-tdb-crud-text value="Ripperdoc in Sector 4 who installed Alice's neural deck." placeholder="Node text / lore...">
-                                <button type="button" class="cl-btn cl-btn-primary cl-btn-sm" data-tdb-act="crud-insert">
-                                    <i class="fa-solid fa-plus" aria-hidden="true"></i> Insert + Index
-                                </button>
-                            </div>
-                            <div class="tdb-row">
-                                <label class="tdb-note">Src</label>
-                                <input type="number" class="glass-input tdb-num" data-tdb-edge-src value="1" min="1">
-                                <label class="tdb-note">Dst</label>
-                                <input type="number" class="glass-input tdb-num" data-tdb-edge-dst value="6" min="1">
-                                <input type="search" class="glass-input tdb-flex" data-tdb-edge-label value="treated_by" placeholder="Edge label">
-                                <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdb-act="crud-link">
-                                    <i class="fa-solid fa-link" aria-hidden="true"></i> Link
-                                </button>
-                            </div>
-                            <div class="tdb-row">
-                                <input type="search" class="glass-input tdb-flex" data-tdb-idx-field value="faction" placeholder="Payload field (e.g. faction, kind)">
-                                <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdb-act="idx-create">
-                                    <i class="fa-solid fa-bolt" aria-hidden="true"></i> Create Index
-                                </button>
-                                <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdb-act="idx-info">
-                                    <i class="fa-solid fa-list" aria-hidden="true"></i> Index Info
-                                </button>
-                                <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdb-act="graph-validate">
-                                    <i class="fa-solid fa-shield-halved" aria-hidden="true"></i> Validate Graph
-                                </button>
-                            </div>
-                            <pre class="tdb-pre" data-tdb-crud-out>// CRUD, secondary index & integrity output will appear here</pre>
-                        </section>
-                    </div>
-
-                    <section class="tdb-panel">
-                        <h3 class="tdb-heading">5. Quick-Start Snippet for Project Σ Extensions</h3>
-                        <p class="tdb-note">Any Project Σ client extension can access TriviumDB via <code>window.__SIGMA_TRIVIUM__.db</code> or <code>ctx.commands.run('triviumdb.*')</code>:</p>
-                        <pre class="tdb-pre">const db = await window.__SIGMA_TRIVIUM__.db.open('my-ext', { dim: 1536 });
-const a = await db.insert(vecA, { name: 'Alice', text: 'Knows the vault code' });
-const b = await db.insert(vecB, { name: 'Vault 7', kind: 'location' });
-await db.link(a, b, 'infiltrated', 0.95);
-await db.indexText(a, 'Alice knows the vault code');
-await db.buildTextIndex();
-
-const hits = await db.searchAdvanced(null, {
-  queryText: 'vault code',
-  topK: 5,
-  expandDepth: 2
-});
-const rows = await db.query('MATCH (n) WHERE n.id == $id RETURN n', { id: a });</pre>
-                    </section>
-
-                    <section class="tdb-panel">
-                        <h3 class="tdb-heading">The TriviumDB doors, as the extension exposes them</h3>
-                        <div data-tdb-doors></div>
-                    </section>
+                    <div class="tdb-results" data-tdb-results aria-live="polite"></div>
+                    <section class="tdb-card" data-tdb-status><p class="tdb-dim">Reading the index…</p></section>
+                    <details class="tdb-dev" data-tdb-dev>
+                        <summary><i class="fa-solid fa-code" aria-hidden="true"></i> Developer tools <span class="tdb-dim">the raw engine, for extension authors</span></summary>
+                        <div data-tdb-dev-body></div>
+                    </details>
                 </div>`;
+            const $ = (sel) => el.querySelector(sel);
+            let shown = false;
+            let st = null;
+            let scope = 'all';
+            let lastQ = '';
+            let hits = [];
+            let timer = null;
+            let dev = null;
 
-            const $ = (sel) => /** @type {HTMLElement} */ (el.querySelector(sel));
-            const tile = (value, label) => `<div class="tdb-tile"><span class="tdb-tile-value">${esc(value)}</span><span class="tdb-tile-label">${esc(label)}</span></div>`;
-
-            const paintDoors = () => {
-                const list = (title, rows) => `<details class="tdb-doors"><summary>${esc(title)} (${rows.length})</summary><ul class="tdb-door-list">${rows.join('')}</ul></details>`;
-                const row = (name, type) => `<li><code>${esc(name)}</code> <span class="tdb-type">${esc(type)}</span></li>`;
-
-                const handleDoors = [
-                    row('db.insert(vector, payload?)', '=> Promise<number> (NodeId)'),
-                    row('db.batchInsert(vectors, payloads)', '=> Promise<number[]> (atomic batch commit)'),
-                    row('db.upsert(id, vector, payload?)', '=> Promise<void> (insert or overwrite by NodeId)'),
-                    row('db.get(id)', '=> Promise<{ id, vector, payload, edges } | null>'),
-                    row('db.updatePayload(id, payload)', '=> Promise<void> (replace JSON payload)'),
-                    row('db.patchPayload(id, patch)', '=> Promise<void> ($set, $inc, $unset partial update)'),
-                    row('db.updateVector(id, vector)', '=> Promise<void>'),
-                    row('db.delete(id)', '=> Promise<void> (atomic 3-layer delete: vector + payload + edges)'),
-                    row('db.link(src, dst, label?, weight?)', '=> Promise<void> (directed weighted edge, negative = inhibitory)'),
-                    row('db.unlink(src, dst, label?)', '=> Promise<void>'),
-                    row('db.shortestPath(source, target, { maxDepth?, label? })', '=> Promise<number[] | null>'),
-                    row('db.subgraph(id, { maxDepth?, labels?, direction? })', '=> Promise<{ nodes, edges, visitedNodes, traversedEdges, truncated }>'),
-                    row('db.leidenCluster({ minCommunitySize?, maxIterations?, withCentroids? })', '=> Promise<{ nodeToCluster, clusterLabels, centroids }>'),
-                    row('db.indexText(id, text)', '=> Promise<void> (BM25 full-text document indexing)'),
-                    row('db.indexKeyword(id, keyword)', '=> Promise<void> (Aho-Corasick exact keyword automaton)'),
-                    row('db.buildTextIndex()', '=> Promise<void> (compile text index & flush)'),
-                    row('db.createIndex(field)', '=> Promise<void> (O(1) secondary property index on payload field)'),
-                    row('db.dropIndex(field)', '=> Promise<void>'),
-                    row('db.indexInfo()', '=> Promise<PropertyIndexInfo[]>'),
-                    row('db.validateGraph()', '=> Promise<GraphIntegrityReport>'),
-                    row('db.repairGraph()', '=> Promise<GraphRepairReport>'),
-                    row('db.search(vector?, { queryText?, topK?, expandDepth?, minScore?, filter? })', '=> Promise<SearchHit[]>'),
-                    row('db.searchBatch(vectors, { parallelism?, topK?, minScore? })', '=> Promise<SearchHit[][]>'),
-                    row('db.searchAdvanced(vector?, SearchOptions)', '=> Promise<{ hits, context: { timingsMs, stageCounts, observations } }>'),
-                    row('db.query(tqlText, params?)', '=> Promise<{ type: "query", rows } | { type: "mutation", affected, createdIds }>'),
-                    row('db.buildQuiverIndex()', '=> Promise<void> (build QuIVer vector index)'),
-                    row('db.compact()', '=> Promise<void> (compact storage & reclaim tombstones)'),
-                    row('db.flush()', '=> Promise<void> (flush WAL & sidecars to disk)'),
-                    row('db.close()', '=> Promise<{ closed: boolean, namespace: string }>'),
-                    row('db.stats()', '=> Promise<{ namespace, dim, nodeCount, estimatedMemoryBytes, graph, storage }>'),
-                ];
-
-                const pipelineDoors = [
-                    row('topK / recallK / rerankK', 'number — final top-K (default 5), recall pool, and pre-diffusion rerank pool'),
-                    row('expandDepth / expandLabels / edgeDirection', 'number / string[] / "out"|"in"|"both" — SA-PPR graph walk hop depth & edge filter'),
-                    row('minEdgeWeight / maxEdgesPerNode', 'number — edge weight threshold and fanout cap during graph walk'),
-                    row('teleportAlpha', 'number (0.0..1.0) — Personalized PageRank restart probability'),
-                    row('diffusionBias', 'number[] — CCSA context-gated directional bias vector for graph diffusion'),
-                    row('enableTextHybridSearch / textBoost', 'boolean / number — fuse BM25 + keyword automaton via weighted RRF'),
-                    row('enableSparseResidual / fistaLambda / fistaThreshold', 'boolean / number — FISTA sparse residual shadow query for multi-concept recall'),
-                    row('enableDpp / dppQualityWeight', 'boolean / number — Determinantal Point Process diversity sampling'),
-                    row('enableRefractoryFatigue', 'boolean — neural refractory period to suppress repetitive hub nodes across turns'),
-                    row('payloadFilter', 'Record<string, FilterOperator> — MongoDB-style pre-filter ($eq, $ne, $gt, $gte, $lt, $lte, $in, $and, $or)'),
-                ];
-
-                const tqlDoors = [
-                    row('MATCH (a)-[:label]->(b) WHERE ... RETURN a, b', 'Cypher-style pattern matching over nodes and directed edges'),
-                    row('FIND {field: "value", score: {$gte: 0.5}} RETURN *', 'MongoDB-style document filter query (uses secondary index when created)'),
-                    row('SEARCH VECTOR $vec TOP 5 RETURN *', 'Vector ANN query with $param token expansion'),
-                    row('CREATE (n {name: "Alice", role: "netrunner"})', 'TQL mutation returning { type: "mutation", affected, createdIds }'),
-                    row('MATCH (n) WHERE n.id == $id DELETE n', 'TQL node deletion with safe $param expansion'),
-                ];
-
-                const sigmaDoors = [
-                    row('window.__SIGMA_TRIVIUM__.db.open(namespace, options?)', 'Global WebView entry point for opening a namespace handle'),
-                    row('triviumdb.open', 'ctx.commands.run("triviumdb.open", { namespace, options })'),
-                    row('triviumdb.search', 'ctx.commands.run("triviumdb.search", { namespace, vector, queryText, topK, expandDepth, advanced })'),
-                    row('triviumdb.query', 'ctx.commands.run("triviumdb.query", { namespace, query, params })'),
-                    row('triviumdb.list-namespaces', 'ctx.commands.run("triviumdb.list-namespaces")'),
-                    row('triviumdb.seed-demo', 'ctx.commands.run("triviumdb.seed-demo", { namespace, reset })'),
-                    row('triviumdb.status', 'ctx.commands.run("triviumdb.status")'),
-                    row('{{trivium_recall::query}}', 'Server prompt macro expanding top hybrid search hits from default namespace'),
-                    row('{{trivium_recall::namespace::query}}', 'Server prompt macro targeting a specific namespace'),
-                    row('POST /api/ext/triviumdb/handle', 'Server RPC route ({ request: { type: "open" | "execute" | "close" | "listNamespaces" | "flushAll" } })'),
-                ];
-
-                $('[data-tdb-doors]').innerHTML = [
-                    list('DatabaseHandle methods (window.__SIGMA_TRIVIUM__.db.open)', handleDoors),
-                    list('Cognitive Pipeline options (db.searchAdvanced)', pipelineDoors),
-                    list('TQL statements & patterns (db.query)', tqlDoors),
-                    list('Project Σ commands, macros & routes', sigmaDoors),
-                ].join('');
-            };
-
-            const refreshStats = async () => {
-                try {
-                    const st = await dbApi.status();
-                    if (!shown) return;
-                    if (!st.ok) {
-                        $('[data-tdb-lead]').innerHTML = `<span class="is-error">Native binary not loaded (${esc(st.nativeError)}). Run <code>bash extensions/installed/triviumdb/scripts/build-termux.sh</code> in Termux.</span>`;
-                        return;
-                    }
-                    const db = await dbApi.open(activeNs, { dim: 4 });
-                    const stats = await db.stats();
-                    if (!shown) return;
-                    $('[data-tdb-lead]').textContent = `Engine: TriviumDB v${st.version} (${st.binary}) · Active Namespace: "${stats.namespace}" · Storage: ${stats.storage?.storage_mode || 'mmap'}`;
-                    $('[data-tdb-tiles]').innerHTML = [
-                        tile(stats.nodeCount, 'Nodes'),
-                        tile(stats.graph?.edgeCount ?? 0, 'Graph Edges'),
-                        tile(stats.graph?.labelCount ?? 0, 'Edge Labels'),
-                        tile(`${stats.dim}D`, 'Vector Dim'),
-                        tile(formatBytes(stats.estimatedMemoryBytes), 'Memory Used'),
-                        tile((st.onDiskNamespaces || []).length, 'Disk Namespaces'),
-                    ].join('');
-                } catch (err) {
-                    if (shown) $('[data-tdb-lead]').textContent = `Could not read engine status: ${why(err)}`;
-                }
-            };
-
-            const runSearch = async () => {
-                const q = /** @type {HTMLInputElement} */ ($('[data-tdb-search-q]')).value.trim();
-                const adv = /** @type {HTMLInputElement} */ ($('[data-tdb-search-adv]')).checked;
-                const outEl = $('[data-tdb-search-out]');
-                outEl.innerHTML = '<p class="tdb-note">Searching...</p>';
-                try {
-                    const db = await dbApi.open(activeNs, { dim: 4 });
-                    if (adv) {
-                        const res = await db.searchAdvanced(null, { queryText: q, topK: 5, expandDepth: 2 });
-                        const timings = Object.entries(res.context?.timingsMs || {})
-                            .map(([k, v]) => `${k}: ${Number(v).toFixed(3)}ms`)
-                            .join(' · ');
-                        outEl.innerHTML = `
-                            <p class="tdb-note">Pipeline timings: ${esc(timings || 'n/a')}</p>
-                            ${(res.hits || []).map(h => `<div class="tdb-hit-card">
-                                <div class="tdb-hit-head">
-                                    <strong>#${esc(h.id)} ${esc(h.payload?.name || 'Node')} (${esc(h.payload?.kind || 'item')})</strong>
-                                    <span class="tdb-score">score ${Number(h.score).toFixed(3)}</span>
-                                </div>
-                                <p class="tdb-hit-body">${esc(h.payload?.text || JSON.stringify(h.payload))}</p>
-                            </div>`).join('') || '<p class="tdb-note">No hits returned.</p>'}`;
-                    } else {
-                        const hits = await db.search(null, { queryText: q, topK: 5, expandDepth: 1 });
-                        outEl.innerHTML = (hits || []).map(h => `<div class="tdb-hit-card">
-                            <div class="tdb-hit-head">
-                                <strong>#${esc(h.id)} ${esc(h.payload?.name || 'Node')}</strong>
-                                <span class="tdb-score">score ${Number(h.score).toFixed(3)}</span>
-                            </div>
-                            <p class="tdb-hit-body">${esc(h.payload?.text || JSON.stringify(h.payload))}</p>
-                        </div>`).join('') || '<p class="tdb-note">No hits returned.</p>';
-                    }
-                } catch (err) {
-                    outEl.innerHTML = `<p class="tdb-line is-error">${esc(why(err))}</p>`;
-                }
-            };
-
-            const runTql = async () => {
-                const queryStr = /** @type {HTMLTextAreaElement} */ ($('[data-tdb-tql-input]')).value.trim();
-                const outPre = $('[data-tdb-tql-out]');
-                outPre.textContent = 'Executing TQL...';
-                try {
-                    const db = await dbApi.open(activeNs, { dim: 4 });
-                    const res = await db.query(queryStr);
-                    outPre.textContent = JSON.stringify(res, null, 2);
-                    await refreshStats();
-                } catch (err) {
-                    outPre.textContent = `Error: ${why(err)}`;
-                }
-            };
-
-            el.addEventListener('click', async (ev) => {
-                const presetBtn = /** @type {HTMLElement | null} */ (/** @type {Element} */ (ev.target).closest('[data-tdb-preset]'));
-                if (presetBtn) {
-                    const p = presetBtn.dataset.tdbPreset;
-                    const input = /** @type {HTMLTextAreaElement} */ ($('[data-tdb-tql-input]'));
-                    if (p === 'match-all') input.value = 'MATCH (n) RETURN n';
-                    else if (p === 'find-char') input.value = "FIND {kind: 'character'} RETURN *";
-                    else if (p === 'create-node') input.value = 'CREATE (n {name: "Ghost Drone", kind: "construct", text: "Autonomous recon drone patrolling Neon Spire"})';
+            function paintStatus() {
+                const box = $('[data-tdb-status]');
+                if (!st) return;
+                if (!st.engine.ok) {
+                    box.className = 'tdb-card is-warn';
+                    box.innerHTML = `<p>${engineHint(st)}</p>`;
                     return;
                 }
+                const ix = st.index;
+                const job = st.job;
+                const busy = job && (job.status === 'queued' || job.status === 'running');
+                const pct = busy && job.progress?.total ? Math.round((job.progress.done / job.progress.total) * 100) : null;
+                const how = st.mode === 'meaning'
+                    ? `<span class="tdb-pill is-match"><i class="fa-solid fa-brain" aria-hidden="true"></i> By meaning</span> <span class="tdb-dim">${esc(st.connection.name)} · ${esc(st.connection.model)}</span>`
+                    : '<span class="tdb-pill"><i class="fa-solid fa-font" aria-hidden="true"></i> By words</span> <span class="tdb-dim">Pick a connection in the settings to search by meaning.</span>';
+                const what = ix.built
+                    ? `<strong>${fmtNum(ix.indexed.messages)}</strong> messages and <strong>${fmtNum(ix.indexed.lore)}</strong> lore entries indexed`
+                    : 'Nothing indexed yet';
+                const waitingN = (st.scope.chats ? ix.waiting.messages : 0) + (st.scope.lore ? ix.waiting.lore : 0);
+                const waiting = ix.built && waitingN
+                    ? `<span class="tdb-dim">· ${fmtNum(waitingN)} waiting${st.mode === 'meaning' ? ` (about ${fmtNum(ix.waiting.tokens)} tokens to embed)` : ''}</span>`
+                    : ix.built ? '<span class="tdb-dim">· up to date</span>' : '';
+                const verb = !ix.built ? 'Index my library' : ix.stale ? 'Re-index with the new settings' : 'Update index';
+                box.className = `tdb-card${st.connectionError ? ' is-warn' : ''}`;
+                box.innerHTML = `
+                    <div class="tdb-status-row">
+                        <div class="tdb-status-main">
+                            <div class="tdb-status-line">${how}</div>
+                            <div class="tdb-status-line">${what} ${waiting}</div>
+                            ${ix.stale ? '<div class="tdb-status-line tdb-warn-text">The way text is understood changed in the settings; index again to search that way.</div>' : ''}
+                            ${st.connectionError ? `<div class="tdb-status-line tdb-warn-text">${esc(st.connectionError)}</div>` : ''}
+                            ${job?.status === 'failed' ? `<div class="tdb-status-line tdb-warn-text">The last indexing stopped: ${esc(job.error || 'unknown error')}</div>` : ''}
+                        </div>
+                        <div class="tdb-status-verbs">
+                            <button type="button" class="cl-btn cl-btn-primary cl-btn-sm" data-tdb-act="index" ${busy || st.connectionError ? 'disabled' : ''}>
+                                <i class="fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-arrows-rotate'}" aria-hidden="true"></i> ${busy ? (job.status === 'queued' ? 'Queued' : 'Indexing…') : esc(verb)}
+                            </button>
+                            <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdb-act="settings"><i class="fa-solid fa-gear" aria-hidden="true"></i> Settings</button>
+                        </div>
+                    </div>
+                    ${busy ? `<div class="tdb-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" ${pct !== null ? `aria-valuenow="${pct}"` : ''}>
+                        <span style="width:${pct ?? 5}%"></span></div>
+                        <p class="tdb-dim tdb-progress-note">${esc(job.progress?.note || 'Starting…')}${pct !== null ? ` · ${pct}%` : ''}</p>` : ''}`;
+            }
 
-                const actBtn = /** @type {HTMLElement | null} */ (/** @type {Element} */ (ev.target).closest('[data-tdb-act]'));
-                if (!actBtn) return;
-                const act = actBtn.dataset.tdbAct;
+            function paintResults(message) {
+                const box = $('[data-tdb-results]');
+                if (message) { box.innerHTML = message; return; }
+                if (!lastQ) {
+                    box.innerHTML = st?.index?.built ? `
+                        <div class="tdb-empty">
+                            <p class="tdb-dim">Describe a moment instead of quoting it:</p>
+                            <div class="tdb-tries">
+                                ${['when we first met', 'a promise someone made', 'an argument about trust', 'the plan to escape'].map(t => `<button type="button" class="tdb-chip" data-tdb-try="${esc(t)}">${esc(t)}</button>`).join('')}
+                            </div>
+                        </div>` : `
+                        <ol class="tdb-steps">
+                            <li><strong>Choose how it reads.</strong> In the settings, pick a connection that makes embeddings (OpenAI-compatible, OpenRouter, Ollama, LM Studio or Google AI Studio) to search by meaning. Without one it matches words.</li>
+                            <li><strong>Index your library.</strong> Press <em>Index my library</em> below. New messages join as you chat.</li>
+                            <li><strong>Search here, or let the AI remember.</strong> In any chat, open the <em>Smart Recall</em> window and switch on <em>Remind the AI</em>.</li>
+                        </ol>`;
+                    return;
+                }
+                if (!hits.length) {
+                    box.innerHTML = '<p class="tdb-empty tdb-dim">Nothing close enough. Try other words, or describe the moment.</p>';
+                    return;
+                }
+                box.innerHTML = hits.map((h, i) => hitHtml(h, lastQ, i)).join('');
+            }
 
-                if (act === 'seed') {
-                    try {
-                        const res = await dbApi.seedDemo(activeNs, true);
-                        CoreAPI.showToast(`Seeded ${res.stats?.nodeCount ?? 5} nodes & ${res.stats?.graph?.edgeCount ?? 7} edges into "${activeNs}"`, 'success');
-                        await refreshStats();
-                        await runSearch();
-                        await runTql();
-                    } catch (err) {
-                        CoreAPI.showToast(`Seed failed: ${why(err)}`, 'error');
+            async function readStatus() {
+                try {
+                    st = await call('/recall/status');
+                } catch (e) {
+                    $('[data-tdb-status]').innerHTML = `<p class="tdb-warn-text">Could not read Smart Recall: ${esc(why(e))}</p>`;
+                    return;
+                }
+                if (!shown) return;
+                paintStatus();
+                if (!lastQ) paintResults();
+                const busy = st.job && (st.job.status === 'queued' || st.job.status === 'running');
+                clearTimeout(timer);
+                if (busy) timer = setTimeout(readStatus, POLL_MS);
+            }
+
+            async function search(q) {
+                lastQ = String(q || '').trim();
+                $('[data-tdb-by]').textContent = '';
+                if (!lastQ) { hits = []; paintResults(); return; }
+                paintResults('<p class="tdb-empty tdb-dim"><i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i> Searching…</p>');
+                try {
+                    const out = await call('/recall/search', 'POST', { q: lastQ, scope, limit: 30 });
+                    hits = out.hits || [];
+                    $('[data-tdb-by]').textContent = out.by === 'meaning' ? 'by meaning' : out.by === 'words' ? 'by words' : '';
+                    paintResults();
+                } catch (e) {
+                    hits = [];
+                    paintResults(`<p class="tdb-empty tdb-warn-text">${esc(why(e))}</p>`);
+                }
+            }
+
+            $('[data-tdb-form]').addEventListener('submit', (e) => {
+                e.preventDefault();
+                void search($('[data-tdb-q]').value);
+            });
+            el.addEventListener('click', async (e) => {
+                const t = /** @type {Element} */ (e.target);
+                if (t.closest('[data-tdb-dev]')) return;
+                const chip = t.closest('[data-tdb-scope]');
+                if (chip) {
+                    scope = chip.dataset.tdbScope;
+                    for (const c of el.querySelectorAll('[data-tdb-scope]')) {
+                        const on = c === chip;
+                        c.classList.toggle('is-on', on);
+                        c.setAttribute('aria-checked', String(on));
                     }
-                } else if (act === 'flush') {
-                    try {
-                        const res = await dbApi.flushAll();
-                        CoreAPI.showToast(`Flushed ${res.flushed} open namespace(s) to disk`, 'success');
-                        await refreshStats();
-                    } catch (err) {
-                        CoreAPI.showToast(`Flush failed: ${why(err)}`, 'error');
+                    if (lastQ) void search(lastQ);
+                    return;
+                }
+                const tryBtn = t.closest('[data-tdb-try]');
+                if (tryBtn) {
+                    $('[data-tdb-q]').value = tryBtn.dataset.tdbTry;
+                    void search(tryBtn.dataset.tdbTry);
+                    return;
+                }
+                const hitBtn = t.closest('[data-tdb-hit]');
+                if (hitBtn) {
+                    const h = hits[Number(hitBtn.dataset.tdbHit)];
+                    if (h) void openHit(h);
+                    return;
+                }
+                const act = t.closest('[data-tdb-act]')?.dataset.tdbAct;
+                if (act === 'index') {
+                    const rebuild = !!st?.index?.stale;
+                    const ix = st?.index;
+                    const n = ix ? ix.waiting.messages + ix.waiting.lore : 0;
+                    if (st?.mode === 'meaning' && n > 2000) {
+                        const ok = await CoreAPI.showConfirm({
+                            title: 'Index your library?',
+                            message: `About ${fmtNum(n)} messages and entries (roughly ${fmtNum(ix.waiting.tokens)} tokens) go to “${st.connection.name}” to be embedded. Embedding is cheap, but not free on paid APIs. It runs in the background while you keep using the app.`,
+                            confirmLabel: 'Index',
+                            icon: 'fa-solid fa-arrows-rotate',
+                        });
+                        if (ok !== true) return;
                     }
-                } else if (act === 'refresh') {
-                    await refreshStats();
-                } else if (act === 'search') {
-                    await runSearch();
-                } else if (act === 'run-tql') {
-                    await runTql();
-                } else if (act === 'subgraph') {
-                    const rootId = Number(/** @type {HTMLInputElement} */ ($('[data-tdb-graph-root]')).value) || 1;
-                    const outPre = $('[data-tdb-graph-out]');
                     try {
-                        const db = await dbApi.open(activeNs, { dim: 4 });
-                        const sg = await db.subgraph(rootId, { maxDepth: 2, direction: 'both' });
-                        outPre.textContent = JSON.stringify(sg, null, 2);
+                        await call('/recall/index', 'POST', { rebuild });
                     } catch (err) {
-                        outPre.textContent = `Error: ${why(err)}`;
+                        CoreAPI.showToast(`Could not start indexing: ${why(err)}`, 'error');
                     }
-                } else if (act === 'shortest-path') {
-                    const src = Number(/** @type {HTMLInputElement} */ ($('[data-tdb-graph-root]')).value) || 1;
-                    const dst = Number(/** @type {HTMLInputElement} */ ($('[data-tdb-graph-target]')).value) || 4;
-                    const outPre = $('[data-tdb-graph-out]');
-                    try {
-                        const db = await dbApi.open(activeNs, { dim: 4 });
-                        const sp = await db.shortestPath(src, dst, { maxDepth: 6 });
-                        outPre.textContent = JSON.stringify({ source: src, target: dst, shortestPath: sp }, null, 2);
-                    } catch (err) {
-                        outPre.textContent = `Error: ${why(err)}`;
-                    }
-                } else if (act === 'leiden') {
-                    const outPre = $('[data-tdb-graph-out]');
-                    try {
-                        const db = await dbApi.open(activeNs, { dim: 4 });
-                        const clusters = await db.leidenCluster({ minCommunitySize: 1, maxIterations: 10 });
-                        outPre.textContent = JSON.stringify(clusters, null, 2);
-                    } catch (err) {
-                        outPre.textContent = `Error: ${why(err)}`;
-                    }
-                } else if (act === 'crud-insert') {
-                    const name = /** @type {HTMLInputElement} */ ($('[data-tdb-crud-name]')).value.trim() || 'Unnamed Node';
-                    const text = /** @type {HTMLInputElement} */ ($('[data-tdb-crud-text]')).value.trim();
-                    const outPre = $('[data-tdb-crud-out]');
-                    try {
-                        const db = await dbApi.open(activeNs, { dim: 4 });
-                        const id = await db.insert(null, { name, kind: 'character', text });
-                        if (text) await db.indexText(id, text);
-                        await db.indexKeyword(id, name);
-                        await db.buildTextIndex();
-                        const node = await db.get(id);
-                        outPre.textContent = JSON.stringify({ insertedId: id, node }, null, 2);
-                        /** @type {HTMLInputElement} */ ($('[data-tdb-edge-dst]')).value = String(id);
-                        await refreshStats();
-                    } catch (err) {
-                        outPre.textContent = `Error: ${why(err)}`;
-                    }
-                } else if (act === 'crud-link') {
-                    const src = Number(/** @type {HTMLInputElement} */ ($('[data-tdb-edge-src]')).value) || 1;
-                    const dst = Number(/** @type {HTMLInputElement} */ ($('[data-tdb-edge-dst]')).value) || 2;
-                    const label = /** @type {HTMLInputElement} */ ($('[data-tdb-edge-label]')).value.trim() || 'related';
-                    const outPre = $('[data-tdb-crud-out]');
-                    try {
-                        const db = await dbApi.open(activeNs, { dim: 4 });
-                        await db.link(src, dst, label, 1.0);
-                        const srcNode = await db.get(src);
-                        outPre.textContent = JSON.stringify({ linked: { src, dst, label }, srcEdges: srcNode?.edges || [] }, null, 2);
-                        await refreshStats();
-                    } catch (err) {
-                        outPre.textContent = `Error: ${why(err)}`;
-                    }
-                } else if (act === 'idx-create') {
-                    const field = /** @type {HTMLInputElement} */ ($('[data-tdb-idx-field]')).value.trim() || 'faction';
-                    const outPre = $('[data-tdb-crud-out]');
-                    try {
-                        const db = await dbApi.open(activeNs, { dim: 4 });
-                        await db.createIndex(field);
-                        const indexes = await db.indexInfo();
-                        outPre.textContent = JSON.stringify({ createdIndex: field, indexes }, null, 2);
-                    } catch (err) {
-                        outPre.textContent = `Error: ${why(err)}`;
-                    }
-                } else if (act === 'idx-info') {
-                    const outPre = $('[data-tdb-crud-out]');
-                    try {
-                        const db = await dbApi.open(activeNs, { dim: 4 });
-                        const indexes = await db.indexInfo();
-                        outPre.textContent = JSON.stringify({ indexes }, null, 2);
-                    } catch (err) {
-                        outPre.textContent = `Error: ${why(err)}`;
-                    }
-                } else if (act === 'graph-validate') {
-                    const outPre = $('[data-tdb-crud-out]');
-                    try {
-                        const db = await dbApi.open(activeNs, { dim: 4 });
-                        const report = await db.validateGraph();
-                        outPre.textContent = JSON.stringify(report, null, 2);
-                    } catch (err) {
-                        outPre.textContent = `Error: ${why(err)}`;
-                    }
+                    await readStatus();
+                } else if (act === 'settings') {
+                    try { await ctx.commands.run('settings.open', {}); } catch { /* the menu has it too */ }
+                }
+            });
+            const devBox = $('[data-tdb-dev]');
+            devBox.addEventListener('toggle', () => {
+                if (devBox.open) {
+                    if (!dev) dev = mountDevTools($('[data-tdb-dev-body]'), { dbApi, CoreAPI });
+                    dev.enter();
+                } else {
+                    dev?.leave();
                 }
             });
 
             return {
-                async refresh() {
-                    await refreshStats();
-                },
-                enter() {
-                    shown = true;
-                    paintDoors();
-                    void refreshStats();
-                },
-                leave() {
-                    shown = false;
-                },
+                enter() { shown = true; void readStatus(); if (devBox.open) dev?.enter(); },
+                leave() { shown = false; clearTimeout(timer); dev?.leave(); },
+                async refresh() { await readStatus(); if (lastQ) await search(lastQ); },
             };
         }
+
+        // ---- the chat window: recall on or off for this chat, what it recalled, a search of this chat ----
+        let win = null;
+        ctx.ui.addChatWindow({
+            id: 'recall',
+            label: 'Smart Recall',
+            icon: 'fa-clock-rotate-left',
+            min: { w: 24, h: 30 },
+            render(body) { win = mountWindow(body); },
+            onOpen: ({ chatId }) => win?.show(chatId),
+            onClose: () => win?.rest(),
+        });
+        ctx.events.on('conversation.changed', ({ chatId }) => {
+            if (win?.isOpen() && chatId && chatId !== win.chatId()) win.show(chatId);
+        });
+        for (const name of ['message.created', 'message.updated']) {
+            ctx.events.on(name, ({ chatId }) => { if (win?.isOpen() && chatId === win.chatId()) win.reloadSoon(); });
+        }
+
+        function mountWindow(body) {
+            body.innerHTML = `
+                <div class="tdb-win">
+                    <label class="tdb-switch">
+                        <input type="checkbox" class="cl-switch-input" data-tdbw-on><span class="cl-switch" aria-hidden="true"></span>
+                        <span>Remind the AI of relevant past moments</span>
+                    </label>
+                    <div class="tdb-win-scope" data-tdbw-scope-row>
+                        <span class="cl-cwin-dim">Look in</span>
+                        <select class="cl-select-fluid" data-tdbw-scope>
+                            <option value="chat">this chat</option>
+                            <option value="character">every chat with this character</option>
+                        </select>
+                    </div>
+                    <p class="cl-cwin-dim tdb-win-hint" data-tdbw-hint></p>
+                    <div class="tdb-win-section">
+                        <div class="tdb-win-head"><span>Last reply was reminded of</span><button type="button" class="cl-cwin-btn-text" data-tdbw-act="preview" title="What the next reply would be reminded of"><i class="fa-solid fa-eye" aria-hidden="true"></i> Preview next</button></div>
+                        <div data-tdbw-last></div>
+                    </div>
+                    <div class="tdb-win-section">
+                        <form class="tdb-win-search" data-tdbw-form>
+                            <input type="search" class="cl-cwin-input" data-tdbw-q placeholder="Find a moment in this chat…" enterkeyhint="search">
+                            <button type="submit" class="cl-cwin-btn-text is-primary" aria-label="Search"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i></button>
+                        </form>
+                        <div data-tdbw-results></div>
+                    </div>
+                    <p class="cl-cwin-dim tdb-win-foot" data-tdbw-foot></p>
+                </div>`;
+            const $ = (sel) => body.querySelector(sel);
+            const onBox = /** @type {HTMLInputElement} */ ($('[data-tdbw-on]'));
+            const scopeSel = /** @type {HTMLSelectElement} */ ($('[data-tdbw-scope]'));
+            CoreAPI.initCustomSelect?.(scopeSel);
+            let chatId = null;
+            let state = null;
+            let lastHits = [];
+            let found = [];
+            let busy = false;
+
+            const follow = ctx.chats.follow({
+                read: (id) => call(`/recall/chats/${encodeURIComponent(id)}`),
+                moved: (id) => {
+                    chatId = id;
+                    state = null;
+                    found = [];
+                    $('[data-tdbw-q]').value = '';
+                    $('[data-tdbw-results]').innerHTML = '';
+                    paint();
+                },
+                apply: (next) => { state = next; paint(); },
+                fail: (e) => { state = { error: why(e) }; paint(); },
+            });
+
+            function paint() {
+                if (!chatId || !state) {
+                    $('[data-tdbw-hint]').textContent = chatId ? 'Reading…' : 'Open a chat to use Smart Recall here.';
+                    return;
+                }
+                if (state.error) { $('[data-tdbw-hint]').textContent = `Could not read it: ${state.error}`; return; }
+                if (!busy) onBox.checked = !!state.on;
+                if (scopeSel.value !== state.scope) {
+                    scopeSel.value = state.scope;
+                    scopeSel.dispatchEvent(new Event('change', { bubbles: false }));
+                }
+                $('[data-tdbw-scope-row]').classList.toggle('cl-hidden', !state.on);
+                $('[data-tdbw-hint]').textContent = !state.built
+                    ? 'Nothing is indexed yet. Open Smart Recall from the menu and index your library first.'
+                    : state.on
+                        ? `Before each reply, the most relevant older messages (not the newest, which the AI already sees) join the prompt, found ${state.mode === 'meaning' ? 'by meaning' : 'by matching words'}.`
+                        : `Off for this chat${state.byDefault ? ' (on by default elsewhere)' : ''}.`;
+                lastHits = state.last?.hits || [];
+                $('[data-tdbw-last]').innerHTML = lastHits.length
+                    ? lastHits.map((h, i) => hitHtml(h, '', `l${i}`, { compact: true })).join('')
+                    : `<p class="cl-cwin-dim">${state.on ? 'Nothing yet. It fills in with the next reply.' : 'Nothing: recall is off.'}</p>`;
+                $('[data-tdbw-foot]').textContent = state.built ? `${fmtNum(state.indexed)} of ${fmtNum(state.total)} messages of this chat are indexed.` : '';
+            }
+
+            onBox.addEventListener('change', async () => {
+                if (!chatId) return;
+                busy = true;
+                try { await call(`/recall/chats/${encodeURIComponent(chatId)}`, 'PUT', { on: onBox.checked }); } catch (e) { CoreAPI.showToast(`Could not change it: ${why(e)}`, 'error'); }
+                busy = false;
+                await follow.reload();
+            });
+            scopeSel.addEventListener('change', async () => {
+                if (!chatId || !state || state.scope === scopeSel.value) return;
+                try { await call(`/recall/chats/${encodeURIComponent(chatId)}`, 'PUT', { scope: scopeSel.value }); } catch (e) { CoreAPI.showToast(`Could not change it: ${why(e)}`, 'error'); }
+                await follow.reload();
+            });
+            $('[data-tdbw-form]').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const q = $('[data-tdbw-q]').value.trim();
+                const box = $('[data-tdbw-results]');
+                if (!q || !chatId) { box.innerHTML = ''; return; }
+                box.innerHTML = '<p class="cl-cwin-dim">Searching…</p>';
+                try {
+                    const out = await call('/recall/search', 'POST', { q, chatId, limit: 12 });
+                    found = out.hits || [];
+                    box.innerHTML = found.length ? found.map((h, i) => hitHtml(h, q, `f${i}`, { compact: true })).join('') : '<p class="cl-cwin-dim">Nothing close enough.</p>';
+                } catch (err) {
+                    box.innerHTML = `<p class="cl-cwin-dim tdb-warn-text">${esc(why(err))}</p>`;
+                }
+            });
+            body.addEventListener('click', async (e) => {
+                const t = /** @type {Element} */ (e.target);
+                const hitBtn = t.closest('[data-tdb-hit]');
+                if (hitBtn) {
+                    const ref = hitBtn.dataset.tdbHit;
+                    const h = ref.startsWith('l') ? lastHits[Number(ref.slice(1))] : found[Number(ref.slice(1))];
+                    if (h) void openHit(h);
+                    return;
+                }
+                if (t.closest('[data-tdbw-act="preview"]') && chatId) {
+                    try {
+                        const out = await call(`/recall/chats/${encodeURIComponent(chatId)}/preview`);
+                        lastHits = out.hits || [];
+                        $('[data-tdbw-last]').innerHTML = lastHits.length
+                            ? `<p class="cl-cwin-dim">The next reply (preview, ${out.by === 'meaning' ? 'by meaning' : 'by words'}):</p>${lastHits.map((h, i) => hitHtml(h, '', `l${i}`, { compact: true })).join('')}`
+                            : '<p class="cl-cwin-dim">Nothing would be recalled right now.</p>';
+                    } catch (err) {
+                        CoreAPI.showToast(`Could not preview: ${why(err)}`, 'error');
+                    }
+                }
+            });
+
+            return { show: follow.show, rest: follow.rest, reloadSoon: follow.reloadSoon, isOpen: follow.isOpen, chatId: () => chatId };
+        }
+
+        // the composer is about to send: the recall query is embedded with the new message in it, before the prompt
+        ctx.hooks.add('composer.send', async (text, { chatId }) => {
+            if (!chatId || !String(text || '').trim()) return undefined;
+            try {
+                await Promise.race([
+                    call(`/recall/chats/${encodeURIComponent(chatId)}/prime`, 'POST', { text }),
+                    new Promise(resolve => setTimeout(resolve, PRIME_WAIT_MS)),
+                ]);
+            } catch { /* the prompt falls back to the words */ }
+            return undefined;
+        });
+
+        // ---- settings ----
+        ctx.ui.addSettingsSection((el) => {
+            const get = (k) => ctx.settings.get(k);
+            const on = (k) => (get(k) ? ' checked' : '');
+            const sw = (k, label) => `<label><input type="checkbox" class="cl-switch-input" data-tdbs="${k}"${on(k)}><span class="cl-switch" aria-hidden="true"></span><span>${label}</span></label>`;
+            const placement = get('promptPlacement') || 'pre_history';
+            el.innerHTML = `
+                <div class="settings-row">
+                    <label>Understand text with</label>
+                    <select class="cl-select-fluid" data-tdbs-profile><option value="">Nothing: match words only</option></select>
+                    <span class="settings-hint cl-hidden" data-tdbs-gone>The connection picked here was deleted, so Smart Recall matches words until you pick another.</span>
+                    <span class="settings-hint">A connection that makes embeddings lets Smart Recall search by meaning: OpenAI and OpenAI-compatible servers (Ollama, LM Studio, vLLM…), OpenRouter, or Google AI Studio. Changing it means indexing again.</span>
+                </div>
+                <div class="settings-row">
+                    <label>Embedding model</label>
+                    <div class="settings-input-group u-row tdb-set-row">
+                        <input type="search" class="glass-input" data-tdbs="embedModel" autocomplete="off" placeholder="automatic" value="${esc(get('embedModel') || '')}">
+                        <button type="button" class="cl-btn cl-btn-secondary cl-btn-sm" data-tdbs-test><i class="fa-solid fa-plug-circle-check" aria-hidden="true"></i> Test</button>
+                    </div>
+                    <span class="settings-hint" data-tdbs-test-out>Empty picks text-embedding-3-small (gemini-embedding-001 on Google AI Studio). Local servers need their own model name, such as nomic-embed-text.</span>
+                </div>
+                <div class="settings-row">${sw('indexChats', 'Index chat messages')}</div>
+                <div class="settings-row">${sw('indexLore', 'Index lorebook entries')}</div>
+                <div class="settings-row">${sw('autoUpdate', 'Keep the index up to date as you chat')}</div>
+                <div class="settings-row">
+                    ${sw('recallByDefault', 'Remind the AI in every chat unless a chat turns it off')}
+                    <span class="settings-hint">Each chat's Smart Recall window switches it on or off for that chat.</span>
+                </div>
+                <div class="settings-row">
+                    <label>Moments to recall per reply</label>
+                    <input type="number" class="glass-input tdb-num" data-tdbs="recallTopK" min="1" max="12" step="1" value="${esc(get('recallTopK'))}">
+                </div>
+                <div class="settings-row">
+                    <label>Leave out the newest messages</label>
+                    <input type="number" class="glass-input tdb-num" data-tdbs="recallSkipRecent" min="0" max="500" step="1" value="${esc(get('recallSkipRecent'))}">
+                    <span class="settings-hint">The AI sees these already, so recalling them would only repeat them.</span>
+                </div>
+                <div class="settings-row">
+                    <label>Closest match needed (0 to 1)</label>
+                    <input type="number" class="glass-input tdb-num" data-tdbs="recallMinScore" min="0" max="1" step="0.05" value="${esc(get('recallMinScore'))}">
+                    <span class="settings-hint">Higher recalls less but closer. Search results show each match's closeness, which helps pick this.</span>
+                </div>
+                <div class="settings-row">
+                    <label>Where it goes in the prompt</label>
+                    <select class="cl-select-fluid" data-tdbs="promptPlacement">
+                        <option value="pre_history"${placement === 'pre_history' ? ' selected' : ''}>Before the conversation</option>
+                        <option value="post_history"${placement === 'post_history' ? ' selected' : ''}>After the conversation</option>
+                        <option value="at_depth"${placement === 'at_depth' ? ' selected' : ''}>Inside the conversation</option>
+                    </select>
+                </div>
+                <div class="settings-row" data-tdbs-depth${placement === 'at_depth' ? '' : ' hidden'}>
+                    <label>Messages back from the newest</label>
+                    <input type="number" class="glass-input tdb-num" data-tdbs="promptDepth" min="0" max="50" step="1" value="${esc(get('promptDepth'))}">
+                </div>
+                <div class="settings-row">
+                    <label>Heading the AI reads</label>
+                    <textarea class="glass-input" rows="2" data-tdbs="recallHeading" placeholder="Earlier moments from this story that may matter now. They already happened; use them for continuity, not as new events.">${esc(get('recallHeading') || '')}</textarea>
+                </div>
+                <details class="tdb-set-dev">
+                    <summary>Developer</summary>
+                    <div class="settings-row">
+                        <label>Default vector size for new namespaces</label>
+                        <input type="number" class="glass-input tdb-num" data-tdbs="defaultDim" min="1" max="8192" value="${esc(get('defaultDim'))}">
+                    </div>
+                    <div class="settings-row">
+                        <label>Default write-ahead log sync</label>
+                        <select class="cl-select-fluid" data-tdbs="defaultSyncMode">
+                            ${['normal', 'full', 'off'].map(v => `<option value="${v}"${get('defaultSyncMode') === v ? ' selected' : ''}>${v}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="settings-row">
+                        <label>Namespace {{trivium_recall::query}} searches</label>
+                        <input type="search" class="glass-input" data-tdbs="recallNamespace" maxlength="128" value="${esc(get('recallNamespace') || 'playground')}">
+                        <span class="settings-hint"><code>{{trivium_recall}}</code> alone writes this chat's Smart Recall anywhere a prompt holds it.</span>
+                    </div>
+                </details>`;
+            for (const input of el.querySelectorAll('[data-tdbs]')) {
+                input.addEventListener('change', () => {
+                    const key = input.dataset.tdbs;
+                    if (input.type === 'checkbox') ctx.settings.set(key, input.checked);
+                    else if (input.type === 'number') {
+                        const v = Number(input.value);
+                        const val = Number.isFinite(v) && input.value !== '' ? Math.min(Number(input.max), Math.max(Number(input.min), v)) : ctx.settings.defaults[key];
+                        input.value = String(val);
+                        ctx.settings.set(key, val);
+                    } else ctx.settings.set(key, input.value.trim());
+                    if (key === 'promptPlacement') el.querySelector('[data-tdbs-depth]').hidden = input.value !== 'at_depth';
+                });
+            }
+            for (const sel of el.querySelectorAll('select[data-tdbs]')) CoreAPI.initCustomSelect?.(sel);
+            void ctx.ui.connectionSelect(el.querySelector('[data-tdbs-profile]'), { key: 'embedProfile' })
+                .then(({ gone }) => el.querySelector('[data-tdbs-gone]').classList.toggle('cl-hidden', !gone));
+            el.querySelector('[data-tdbs-test]').addEventListener('click', async () => {
+                const out = el.querySelector('[data-tdbs-test-out]');
+                out.textContent = 'Testing…';
+                // a pick is saved within about half a second; the test reads what the server holds
+                await new Promise(r => setTimeout(r, 700));
+                try {
+                    const r = await call('/recall/test', 'POST', {});
+                    out.textContent = r.mode === 'words'
+                        ? 'No connection picked: Smart Recall matches words.'
+                        : `Works: ${r.model} answers ${r.dim}-number vectors in ${r.ms} ms.`;
+                } catch (e) {
+                    out.textContent = `Failed: ${why(e)}`;
+                }
+            });
+        });
     },
 
     dispose() {
-        if (typeof window !== 'undefined') {
-            delete window.__SIGMA_TRIVIUM__;
-        }
+        if (typeof window !== 'undefined') delete window.__SIGMA_TRIVIUM__;
     },
 };
