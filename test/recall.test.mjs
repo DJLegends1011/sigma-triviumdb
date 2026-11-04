@@ -184,6 +184,12 @@ test('search finds by meaning, not just words', async () => {
     assert.ok(chats.body.hits.every(h => h.src === 'msg'));
     assert.match(chats.body.hits[0].text, /wyrm/);
 
+    // results by meaning come in the order of their closeness, whatever words they share with the query
+    const mixed = await ext('/recall/search', 'POST', { q: 'the inn where my sibling went', limit: 30 });
+    const shown = mixed.body.hits.filter(h => h.match !== null && !h.greeting).map(h => h.match);
+    assert.deepEqual(shown, [...shown].sort((a, b) => b - a), JSON.stringify(mixed.body.hits.map(h => [h.match, h.words])));
+    assert.match(mixed.body.hits[0].text, /brother Kai/);
+
     const here = await ext('/recall/search', 'POST', { q: 'dragon fire', chatId });
     assert.ok(here.body.hits.every(h => h.chatId === chatId));
 });

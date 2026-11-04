@@ -530,7 +530,10 @@ export function registerRecall(router, ctx, engine) {
                 rank++;
             }
         }
-        const scoreOf = (h) => (h.sem ?? 0) + (h.kw ? 0.15 : 0) - (h.sem === null ? (h.kwRank || 0) * 0.001 : 0)
+        // by meaning, the closeness decides the order and a word match only breaks ties: embedding models
+        // squeeze every score into a narrow band (Gemini's sit within 0.6 to 0.8), so any bigger bonus lets one
+        // shared common word ("room", "wanted") outrank a closer moment. Items only the words found come after.
+        const scoreOf = (h) => (h.sem === null ? (vec ? -1 : 0) - (h.kwRank || 0) * 0.001 : h.sem + (h.kw ? 0.002 : 0))
             - (h.payload?.greeting ? GREETING_PENALTY : 0);
         // the same text in several places (a greeting in every chat, the shared start of branches) shows once
         const seen = new Set();
