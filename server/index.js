@@ -7,9 +7,37 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { registerRecall, migrations as recallMigrations } from './recall.js';
+import { createEmbeddings, keywordQuery } from './embed.js';
 
-export const migrations = recallMigrations;
+// append-only: an entry that ran is never edited, a change is a new entry. 0 held Smart Recall's index
+// while it lived here; it moved to the smart-recall extension, and 1 drops what it left.
+export const migrations = [
+    `CREATE TABLE x_triviumdb_recall (
+        key TEXT PRIMARY KEY,
+        space TEXT NOT NULL,
+        node INTEGER NOT NULL,
+        digest TEXT NOT NULL,
+        src TEXT NOT NULL,
+        chat_id TEXT,
+        message_id INTEGER,
+        seq INTEGER,
+        world TEXT,
+        uid INTEGER,
+        updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX x_triviumdb_recall_chat ON x_triviumdb_recall(chat_id);
+    CREATE INDEX x_triviumdb_recall_world ON x_triviumdb_recall(world);
+    CREATE INDEX x_triviumdb_recall_space ON x_triviumdb_recall(space, src);
+    CREATE TABLE x_triviumdb_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );`,
+    `DROP TABLE IF EXISTS x_triviumdb_recall;
+    DROP TABLE IF EXISTS x_triviumdb_meta;`,
+];
+
+// the server API's version: bumped when a door other extensions use changes or is added
+const SERVER_API = 1;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const NATIVE_DIR = path.resolve(__dirname, '..', 'native');
@@ -794,23 +822,96 @@ export function register(router, ctx) {
         }
     });
 
-    // ---- Smart Recall: the library index, its search and the recall of a chat's older moments ----
-    const recall = registerRecall(router, ctx, {
-        openNamespace, getOpenInstance, dropNamespace, loadNativeAddon, textToDemoVector, sanitizeBigInt,
+    // ---- the server API, for other extensions' server halves: globalThis.__SIGMA_TRIVIUM_SERVER__ ----
+    const embeddings = createEmbeddings(ctx);
+    const serverApi = Object.freeze({
+        apiVersion: SERVER_API,
+        version: '0.9.0',
+        /** Whether the native engine loaded on this device, and which binary. */
+        status() {
+            const { TriviumDB, error, binary } = loadNativeAddon();
+            return { ok: !!TriviumDB, binary, error, platform: `${process.platform}-${process.arch}` };
+        },
+        /** A namespace of that account, opened (or the open one): { namespace, dim, db } with db the native handle. */
+        open(user, db, namespace, options = {}) {
+            openNamespace(user, db, namespace, options);
+            return getOpenInstance(user, namespace);
+        },
+        /** Close a namespace and delete its files. */
+        drop: (user, namespace) => dropNamespace(user, namespace),
+        /** The TauriTavern-style operations of the /handle route, on an open namespace. */
+        execute: (user, namespace, operation) => executeOperation(getOpenInstance(user, namespace), operation),
+        /** Embeddings through the account's connections: targetOf(db, profileId, model), embed(target, texts, opts), signatureOf(target). */
+        embeddings,
+        keywordQuery,
+        /** A deterministic stand-in vector for text, for tests and words-only namespaces. */
+        textVector: textToDemoVector,
+        sanitize: sanitizeBigInt,
+    });
+    globalThis.__SIGMA_TRIVIUM_SERVER__ = serverApi;
+
+    // ---- the meaning test: how a connection's embeddings rank texts against a query ----
+    router.post('/embeddings/test', async (req, res) => {
+        try {
+            const target = embeddings.targetOf(req.db, String(req.body?.profileId || ''), String(req.body?.model || ''));
+            if (!target) return res.status(400).json({ error: 'Pick a connection first.' });
+            if (target.error) return res.status(400).json({ error: target.error });
+            const t0 = Date.now();
+            const [vec] = await embeddings.embed(target, ['TriviumDB connection test'], { role: 'query', signal: AbortSignal.timeout(60_000) });
+            res.json({ ok: true, model: target.model, dim: vec.length, ms: Date.now() - t0 });
+        } catch (e) {
+            res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+        }
     });
 
-    // ---- Macro: {{trivium_recall}} (this chat's Smart Recall), {{trivium_recall::query}} or
-    // {{trivium_recall::namespace::query}} (a search of a namespace of your own) ----
+    // query + texts in, every text ranked by closeness in meaning (through a scratch namespace, so the
+    // engine's own search answers) and whether it shares the query's words
+    router.post('/embeddings/rank', async (req, res) => {
+        const ns = 'meaning-test';
+        try {
+            const query = String(req.body?.query || '').trim().slice(0, 2000);
+            const texts = (Array.isArray(req.body?.texts) ? req.body.texts : []).map(x => String(x || '').trim()).filter(Boolean).slice(0, 64);
+            if (!query || !texts.length) return res.status(400).json({ error: 'A query and at least one text are needed.' });
+            const target = embeddings.targetOf(req.db, String(req.body?.profileId || ''), String(req.body?.model || ''));
+            if (!target) return res.status(400).json({ error: 'Pick a connection first.' });
+            if (target.error) return res.status(400).json({ error: target.error });
+            ensureNative();
+            const signal = AbortSignal.timeout(90_000);
+            const t0 = Date.now();
+            const [qv] = await embeddings.embed(target, [query], { role: 'query', signal });
+            const docs = await embeddings.embed(target, texts, { role: 'doc', signal });
+            const embedMs = Date.now() - t0;
+            dropNamespace(req.userHandle, ns);
+            const entry = serverApi.open(req.userHandle, req.db, ns, { dim: qv.length, syncMode: 'off' });
+            const ids = texts.map((text, i) => {
+                const id = entry.db.insert(docs[i], { i, text });
+                entry.db.indexText(id, text);
+                return id;
+            });
+            entry.db.buildTextIndex();
+            const t1 = Date.now();
+            const hits = entry.db.search(qv, texts.length, 0, -1);
+            const words = keywordQuery(query);
+            const wordHits = new Set(words ? entry.db.searchHybrid(new Array(qv.length).fill(0), words, texts.length, 0, 0, 0).filter(h => h.score >= 2).map(h => h.id) : []);
+            const searchMs = Date.now() - t1;
+            const ranked = hits.map(h => ({ text: h.payload?.text ?? texts[ids.indexOf(h.id)], score: Number(h.score.toFixed(4)), match: Math.round(Math.max(0, Math.min(1, h.score)) * 100), words: wordHits.has(h.id) }));
+            dropNamespace(req.userHandle, ns);
+            res.json({ model: target.model, dim: qv.length, embedMs, searchMs, ranked });
+        } catch (e) {
+            try { dropNamespace(req.userHandle, ns); } catch { /* none */ }
+            res.status(e?.statusCode || 502).json({ error: e instanceof Error ? e.message : String(e) });
+        }
+    });
+
+    // ---- Macro: {{trivium_recall::query}} or {{trivium_recall::namespace::query}}: a search of a namespace ----
     ctx.macros.add('trivium_recall', {
         args: [
             { name: 'first', optional: true },
             { name: 'second', optional: true },
         ],
-        handler: ({ db, user, chatId, unnamedArgs: [first, second] }) => {
+        handler: ({ db, user, unnamedArgs: [first, second] }) => {
             try {
-                if (!first && !second) {
-                    return chatId ? (recall.recallFor(db, user, chatId, { force: true })?.text || '') : '';
-                }
+                if (!first && !second) return '';
                 const { TriviumDB } = loadNativeAddon();
                 if (!TriviumDB) return '';
                 let ns = ctx.setting(db, 'recallNamespace') || 'playground';

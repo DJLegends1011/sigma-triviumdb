@@ -141,30 +141,24 @@ test('client page boot, window.__SIGMA_TRIVIUM__.db handle, and commands', async
     assert.ok(page.registry.hasCommand('triviumdb.open'));
     assert.ok(page.registry.hasCommand('triviumdb.search'));
     assert.ok(page.registry.hasCommand('triviumdb.query'));
-    assert.ok(page.registry.hasCommand('triviumdb.recall-search'));
+    assert.ok(page.registry.hasCommand('triviumdb.rank'));
 });
 
-test('the Smart Recall view, chat window and settings render', async () => {
+test('the TriviumDB view renders the meaning test and the workbench; settings render', async () => {
     const views = page.host.getViews();
-    const view = views.find(v => v.name === 'ext:triviumdb/recall');
+    const view = views.find(v => v.name === 'ext:triviumdb/workbench');
     assert.ok(view, `views: ${JSON.stringify(views)}`);
-    assert.equal(view.label, 'Smart Recall');
-    assert.equal(views.some(v => /workbench/.test(v.name)), false, 'the workbench is no longer a view of its own');
-
+    assert.equal(view.label, 'TriviumDB');
     const el = page.dom.createElement('div');
     assert.equal(page.host.enterView(view.name, el, { first: true }), true);
-    for (let i = 0; i < 50 && !/indexed|Nothing indexed/.test(el.innerHTML); i++) await new Promise(r => setTimeout(r, 20));
-    assert.match(el.innerHTML, /Smart Recall/);
-    assert.match(el.innerHTML, /Nothing indexed yet/);
-    assert.match(el.innerHTML, /Index my library/);
-    assert.match(el.innerHTML, /Developer tools/);
-    assert.doesNotMatch(el.innerHTML, /Flush WAL/, 'the workbench stays folded until opened');
+    await new Promise(r => setTimeout(r, 50));
+    assert.match(el.innerHTML, /Meaning test/);
+    assert.match(el.innerHTML, /dragon fire/);
+    assert.match(el.innerHTML, /wyrm set the forest ablaze/);
+    assert.match(el.innerHTML, /Seed Demo Graph/);
     page.host.leaveView(view.name);
-
-    assert.ok(page.host.getChatWindows().some(w => w.id === 'recall' || w.key?.endsWith?.('recall')), 'chat window registered');
-
+    assert.equal(page.host.getChatWindows().length, 0, 'no chat window: the engine has no chat feature of its own');
     const set = page.dom.createElement('div');
     assert.equal(page.host.renderSettingsSection('triviumdb', set), true);
-    assert.match(set.innerHTML, /Understand text with/);
-    assert.match(set.innerHTML, /Remind the AI in every chat/);
+    assert.match(set.innerHTML, /Default vector size/);
 });

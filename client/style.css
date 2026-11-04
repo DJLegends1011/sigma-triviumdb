@@ -467,6 +467,70 @@
     max-width: 100%;
 }
 
+/* ---------- the meaning test ---------- */
+
+.tdb-mt-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-xs);
+}
+
+.tdb-mt-row > .glass-input,
+.tdb-mt-row > .cl-select-fluid,
+.tdb-mt-row > .cl-custom-select {
+    flex: 1 1 200px;
+}
+
+.tdb-mt-texts {
+    width: 100%;
+    font-size: var(--font-xs);
+}
+
+.tdb-mt-list {
+    margin: var(--space-xs) 0 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+}
+
+.tdb-mt-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: var(--space-xs) var(--space-sm);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--glass-border);
+    background: var(--cl-ghost-faint);
+}
+
+.tdb-mt-bar {
+    height: 4px;
+    border-radius: 999px;
+    background: var(--cl-ghost-soft);
+    overflow: hidden;
+}
+
+.tdb-mt-bar span {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+}
+
+.tdb-mt-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.tdb-mt-text {
+    font-size: var(--font-xs);
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+}
+
 /* ---------- the developer workbench (dev.js) ---------- */
 
 .tdb-tour {
