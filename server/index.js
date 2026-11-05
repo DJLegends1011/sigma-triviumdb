@@ -824,16 +824,29 @@ export function register(router, ctx) {
 
     // ---- the server API, for other extensions' server halves: globalThis.__SIGMA_TRIVIUM_SERVER__ ----
     const embeddings = createEmbeddings(ctx);
+    const disabledError = 'Enable the TriviumDB extension in Settings > Extensions';
+    function isEnabledFor(db) {
+        if (!db) return false;
+        try {
+            const list = typeof ctx.stores.settings?.getSetting === 'function'
+                ? ctx.stores.settings.getSetting(db, 'enabledExtensions')
+                : JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'enabledExtensions'").get()?.value || 'null');
+            return Array.isArray(list) && list.includes('triviumdb');
+        } catch { return false; }
+    }
     const serverApi = Object.freeze({
         apiVersion: SERVER_API,
         version: '0.9.0',
         /** Whether the native engine loaded on this device, and which binary. */
-        status() {
+        isEnabled: isEnabledFor,
+        status(db) {
+            if (db && !isEnabledFor(db)) return { ok: false, error: disabledError };
             const { TriviumDB, error, binary } = loadNativeAddon();
             return { ok: !!TriviumDB, binary, error, platform: `${process.platform}-${process.arch}` };
         },
         /** A namespace of that account, opened (or the open one): { namespace, dim, db } with db the native handle. */
         open(user, db, namespace, options = {}) {
+            if (db && !isEnabledFor(db)) throw new Error(disabledError);
             openNamespace(user, db, namespace, options);
             return getOpenInstance(user, namespace);
         },

@@ -122,16 +122,18 @@ export function mountDevTools(el, { dbApi, CoreAPI }) {
 
             <section class="tdb-panel">
                 <h3 class="tdb-heading">5. Quick-Start Snippet for Project Σ Extensions</h3>
-                <p class="tdb-note">Any Project Σ client extension can access TriviumDB via <code>window.__SIGMA_TRIVIUM__.db</code> or <code>ctx.commands.run('triviumdb.*')</code>:</p>
-                <pre class="tdb-pre">const db = await window.__SIGMA_TRIVIUM__.db.open('my-ext', { dim: 1536 });
+                <p class="tdb-note">Use the Project Σ command contract <code>ctx.commands.run('triviumdb.*')</code>. <code>window.__SIGMA_TRIVIUM__.db</code> is an optional handle mirror:</p>
+                <pre class="tdb-pre">const db = await ctx.commands.run('triviumdb.open', {
+  namespace: 'my-ext', options: { dim: 1536 }
+});
 const a = await db.insert(vecA, { name: 'Alice', text: 'Knows the vault code' });
 const b = await db.insert(vecB, { name: 'Vault 7', kind: 'location' });
 await db.link(a, b, 'infiltrated', 0.95);
 await db.indexText(a, 'Alice knows the vault code');
 await db.buildTextIndex();
 
-const hits = await db.searchAdvanced(null, {
-  queryText: 'vault code',
+const hits = await ctx.commands.run('triviumdb.search', {
+  namespace: 'my-ext', advanced: true, queryText: 'vault code',
   topK: 5,
   expandDepth: 2
 });
@@ -206,23 +208,23 @@ const rows = await db.query('MATCH (n) WHERE n.id == $id RETURN n', { id: a });<
         ];
 
         const sigmaDoors = [
-            row('window.__SIGMA_TRIVIUM__.db.open(namespace, options?)', 'Global WebView entry point for opening a namespace handle'),
             row('triviumdb.open', 'ctx.commands.run("triviumdb.open", { namespace, options })'),
             row('triviumdb.search', 'ctx.commands.run("triviumdb.search", { namespace, vector, queryText, topK, expandDepth, advanced })'),
             row('triviumdb.query', 'ctx.commands.run("triviumdb.query", { namespace, query, params })'),
             row('triviumdb.list-namespaces', 'ctx.commands.run("triviumdb.list-namespaces")'),
             row('triviumdb.seed-demo', 'ctx.commands.run("triviumdb.seed-demo", { namespace, reset })'),
             row('triviumdb.status', 'ctx.commands.run("triviumdb.status")'),
+            row('window.__SIGMA_TRIVIUM__.db.open(namespace, options?)', 'Optional handle mirror; prefer the Project Σ commands above'),
             row('{{trivium_recall::query}}', 'Server prompt macro expanding top hybrid search hits from default namespace'),
             row('{{trivium_recall::namespace::query}}', 'Server prompt macro targeting a specific namespace'),
             row('POST /api/ext/triviumdb/handle', 'Server RPC route ({ request: { type: "open" | "execute" | "close" | "listNamespaces" | "flushAll" } })'),
         ];
 
         $('[data-tdb-doors]').innerHTML = [
-            list('DatabaseHandle methods (window.__SIGMA_TRIVIUM__.db.open)', handleDoors),
+            list('Project Σ commands, macros & routes', sigmaDoors),
+            list('DatabaseHandle methods (triviumdb.open command)', handleDoors),
             list('Cognitive Pipeline options (db.searchAdvanced)', pipelineDoors),
             list('TQL statements & patterns (db.query)', tqlDoors),
-            list('Project Σ commands, macros & routes', sigmaDoors),
         ].join('');
     };
 

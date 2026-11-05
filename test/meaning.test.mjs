@@ -107,6 +107,20 @@ test('the server API is there for other extensions', async () => {
     for (const k of ['targetOf', 'embed', 'signatureOf']) assert.equal(typeof T.embeddings[k], 'function', k);
 });
 
+test('server API refuses accounts without TriviumDB enabled before opening a namespace', () => {
+    const T = globalThis.__SIGMA_TRIVIUM_SERVER__;
+    const account = (list) => ({ prepare: () => ({ get: () => ({ value: JSON.stringify(list) }) }) });
+    for (const list of [[], null, {}, 'triviumdb', ['smart-recall']]) {
+        const db = account(list);
+        assert.equal(T.isEnabled(db), false);
+        assert.equal(T.status(db).ok, false);
+        assert.match(T.status(db).error, /Enable the TriviumDB extension in Settings > Extensions/);
+        assert.throws(() => T.open('disabled-account', db, 'forbidden', { dim: 32 }), /Enable the TriviumDB/);
+    }
+    assert.equal(T.isEnabled(account(['triviumdb'])), true);
+    assert.equal(T.status().ok, true, 'device status remains available without an account');
+});
+
 test('Gemini embeds documents as RETRIEVAL_DOCUMENT and the query as RETRIEVAL_QUERY', { skip: !GOOGLE_AI && 'google-ai is not beside this extension' }, async () => {
     const g = await sigma.session.api('/llm/profiles', 'POST', { name: 'Studio', kind: 'gemini', baseUrl: `http://127.0.0.1:${mock.address().port}/v1beta`, apiKey: 'AIza-test', model: 'gemini-x' });
     assert.equal(g.status, 200, JSON.stringify(g.body));
