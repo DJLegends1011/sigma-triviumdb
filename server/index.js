@@ -828,9 +828,7 @@ export function register(router, ctx) {
     function isEnabledFor(db) {
         if (!db) return false;
         try {
-            const list = typeof ctx.stores.settings?.getSetting === 'function'
-                ? ctx.stores.settings.getSetting(db, 'enabledExtensions')
-                : JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'enabledExtensions'").get()?.value || 'null');
+            const list = ctx.settingValue(db, 'enabledExtensions', []);
             return Array.isArray(list) && list.includes('triviumdb');
         } catch { return false; }
     }
