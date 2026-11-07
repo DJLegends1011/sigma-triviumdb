@@ -1,12 +1,18 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const { startSigma } = await import(pathToFileURL('D:/ProjectSigma-main/tools/extension-kit/index.mjs').href);
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const EXT_DIR = path.resolve(__dirname, '..');
+const KIT = [
+    process.env.SIGMA_DIR && path.resolve(process.env.SIGMA_DIR, 'tools/extension-kit/index.mjs'),
+    path.resolve(__dirname, '../../../../ProjectSigma-main/tools/extension-kit/index.mjs'),
+    path.resolve(__dirname, '../../../../../ProjectSigma-main/tools/extension-kit/index.mjs'),
+    'D:/ProjectSigma-main/tools/extension-kit/index.mjs',
+].filter(Boolean).find(p => fs.existsSync(p));
+const { startSigma } = await import(pathToFileURL(KIT).href);
 
 let sigma;
 let page;
