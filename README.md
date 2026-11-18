@@ -1,17 +1,18 @@
 # TriviumDB for Project Σ (`sigma-triviumdb`)
 
-Embedded **vector + knowledge graph + BM25 full-text + TQL** engine ([TriviumDB 0.9.0](https://github.com/YoKONCy/TriviumDB)) for other Project Σ extensions, plus its debug tools. [Smart Recall](https://github.com/DJLegends1011/sigma-smart-recall) is the example extension built on it.
+Embedded **vector + knowledge graph + BM25 full-text + TQL** engine ([TriviumDB 0.9.0](https://github.com/YoKONCy/TriviumDB)) for other Project Σ extensions, plus its debug tools.
 
 ## For extensions
 
-**In the page**
-- `window.__SIGMA_TRIVIUM__.db.open(namespace, { dim })`: a TauriTavern-compatible handle (insert, link, search, searchAdvanced, TQL `query`, subgraph, Leiden clustering, indexes…).
-- Commands: `triviumdb.open`, `triviumdb.search`, `triviumdb.query`, `triviumdb.rank`, `triviumdb.list-namespaces`, `triviumdb.status`, `triviumdb.seed-demo`.
+Everything goes through Project Σ commands, run from your page half with `ctx.commands.run`:
+- `triviumdb.open` `{ namespace, options: { dim } }` → a handle (insert, link, search, searchAdvanced, TQL `query`, subgraph, Leiden clustering, indexes…).
+- `triviumdb.search`, `triviumdb.query`, `triviumdb.list-namespaces`, `triviumdb.status`, `triviumdb.seed-demo`.
+- `triviumdb.embed` `{ texts, role: 'doc' | 'query', profileId?, model? }` → `{ model, signature, dim, vectors }`: embeddings through the account's connections (OpenAI-compatible, OpenRouter, Google AI Studio with retrieval task types, nomic prefixes). Store `signature` with your vectors and re-embed when it changes.
+- `triviumdb.rank` `{ query, texts, profileId?, model? }`: texts ranked by meaning against a query.
 
-**In a server half**: `globalThis.__SIGMA_TRIVIUM_SERVER__` (`apiVersion` 1), looked up at use time since halves load in any order:
-- `status()`, `open(user, db, namespace, options)` → `{ namespace, dim, db }` (`db` the native handle), `drop(user, namespace)`, `execute(user, namespace, operation)`.
-- `embeddings.targetOf(db, profileId, model)`, `embeddings.embed(target, texts, { role: 'doc' | 'query', signal, patient, onWait })`, `embeddings.signatureOf(target)`: embeddings through the account's connections (OpenAI-compatible, OpenRouter, Google AI Studio with retrieval task types, nomic prefixes), waiting out rate limits when `patient`.
-- `keywordQuery(text)`, `textVector(text, dim)`, `sanitize(value)`.
+**Feeding a prompt from your server half**: a prompt block's text is built synchronously, so search ahead of time. Wrap `chat.send` in your page half, run `triviumdb.search`, keep the hits in your own chat slot, and have your server half's `ctx.prompt.addBlock` read that slot.
+
+**TauriTavern extensions**: the handle is also at TauriTavern's `api.db` (see `exposeAsTauriTavern` in `client/api.js`, the one place that name lives), unless a real TauriTavern host already holds it.
 
 **In a prompt**: `{{trivium_recall::query}}` or `{{trivium_recall::namespace::query}}`.
 

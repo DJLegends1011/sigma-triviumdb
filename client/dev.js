@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: 0BSD
 // TriviumDB for Project Σ — the developer workbench: the engine's raw doors (stats, hybrid search,
-// TQL, graph traversal, CRUD) on a sample namespace, for extension authors. Smart Recall does not use it.
+// TQL, graph traversal, CRUD) on a sample namespace, for extension authors.
 
 import { why, formatBytes } from './api.js';
 
@@ -122,7 +122,7 @@ export function mountDevTools(el, { dbApi, CoreAPI }) {
 
             <section class="tdb-panel">
                 <h3 class="tdb-heading">5. Quick-Start Snippet for Project Σ Extensions</h3>
-                <p class="tdb-note">Use the Project Σ command contract <code>ctx.commands.run('triviumdb.*')</code>. <code>window.__SIGMA_TRIVIUM__.db</code> is an optional handle mirror:</p>
+                <p class="tdb-note">Use the Project Σ command contract <code>ctx.commands.run('triviumdb.*')</code>:</p>
                 <pre class="tdb-pre">const db = await ctx.commands.run('triviumdb.open', {
   namespace: 'my-ext', options: { dim: 1536 }
 });
@@ -214,7 +214,8 @@ const rows = await db.query('MATCH (n) WHERE n.id == $id RETURN n', { id: a });<
             row('triviumdb.list-namespaces', 'ctx.commands.run("triviumdb.list-namespaces")'),
             row('triviumdb.seed-demo', 'ctx.commands.run("triviumdb.seed-demo", { namespace, reset })'),
             row('triviumdb.status', 'ctx.commands.run("triviumdb.status")'),
-            row('window.__SIGMA_TRIVIUM__.db.open(namespace, options?)', 'Optional handle mirror; prefer the Project Σ commands above'),
+            row('triviumdb.embed', 'ctx.commands.run("triviumdb.embed", { texts, role: "doc" | "query", profileId?, model? })'),
+            row('TauriTavern database API', 'Extensions written for TauriTavern find the same handle where TauriTavern puts it'),
             row('{{trivium_recall::query}}', 'Server prompt macro expanding top hybrid search hits from default namespace'),
             row('{{trivium_recall::namespace::query}}', 'Server prompt macro targeting a specific namespace'),
             row('POST /api/ext/triviumdb/handle', 'Server RPC route ({ request: { type: "open" | "execute" | "close" | "listNamespaces" | "flushAll" } })'),

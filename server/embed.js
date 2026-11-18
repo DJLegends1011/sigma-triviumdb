@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: 0BSD
 // TriviumDB for Project Σ — embeddings through the account's own connections: OpenAI-compatible servers
-// (OpenAI, OpenRouter, Ollama, LM Studio, vLLM…) and Google AI Studio. Part of the server API other
-// extensions reach through globalThis.__SIGMA_TRIVIUM_SERVER__.embeddings.
+// (OpenAI, OpenRouter, Ollama, LM Studio, vLLM…) and Google AI Studio. Other extensions reach them
+// through the triviumdb.embed and triviumdb.rank commands.
 
 const EMBED_BATCH = 64;
 const EMBED_CHARS = 6000;

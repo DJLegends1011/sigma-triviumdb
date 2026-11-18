@@ -3,7 +3,7 @@
     "name": "TriviumDB",
     "version": "0.3.2",
     "author": "DJLegends",
-    "description": "Embedded vector, knowledge-graph, BM25 full-text and TQL database engine (TriviumDB 0.9.0) for other Project Σ extensions: window.__SIGMA_TRIVIUM__.db and triviumdb.* commands in the page, globalThis.__SIGMA_TRIVIUM_SERVER__ (namespaces + embeddings through your connections) for server halves. Its view is a debug workbench with a meaning test for embedding connections. Smart Recall is the example extension built on it.",
+    "description": "Embedded vector, knowledge-graph, BM25 full-text and TQL database engine (TriviumDB 0.9.0) for other Project Σ extensions, through triviumdb.* commands (open, search, query, embed, rank), with TauriTavern's database API for ported extensions. Its view is a debug workbench with a meaning test for embedding connections.",
     "requires": {
         "api": "2.6"
     },

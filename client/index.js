@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: 0BSD
 // TriviumDB for Project Σ — the client half: the engine for other extensions and its debug view.
-// 1. window.__SIGMA_TRIVIUM__.db (a TauriTavern-compatible database handle) and the triviumdb.* commands.
+// 1. The triviumdb.* commands, and the same handle where TauriTavern extensions look for it (client/api.js).
 // 2. The TriviumDB view: a meaning test (how a connection's embeddings rank texts against a query), then the
 //    developer workbench (stats, hybrid search, TQL, graph traversal, CRUD) and the API catalog.
-// Smart Recall (the smart-recall extension) is the example of a feature built on it.
 
-import { createTriviumClientApi, why } from './api.js';
+import { createTriviumClientApi, exposeAsTauriTavern, why } from './api.js';
 import { mountDevTools } from './dev.js';
 
 const VIEW = 'ext:triviumdb/workbench';
@@ -19,6 +18,8 @@ const SAMPLE_TEXTS = [
     'Morning came with fog over the plains.',
 ];
 
+let removeTauriTavern = () => {};
+
 /** @type {import('../../../../docs/extensions').ClientExtension} */
 export default {
     init(ctx) {
@@ -28,9 +29,7 @@ export default {
         const dbApi = createTriviumClientApi(call);
 
         // ---- the engine for other extensions ----
-        if (typeof window !== 'undefined') {
-            window.__SIGMA_TRIVIUM__ = Object.freeze({ db: dbApi, version: '0.9.0' });
-        }
+        removeTauriTavern = exposeAsTauriTavern(dbApi);
         ctx.commands.register('open', ({ namespace = 'playground', options = {} } = {}) => dbApi.open(namespace, options), {
             title: 'Open a TriviumDB namespace handle',
         });
@@ -52,6 +51,9 @@ export default {
         ctx.commands.register('rank', ({ query, texts, profileId, model } = {}) => call('/embeddings/rank', 'POST', {
             query, texts, profileId: profileId ?? ctx.settings.get('meaningProfile'), model: model ?? ctx.settings.get('meaningModel'),
         }), { title: 'Rank texts against a query by meaning, through a connection\'s embeddings' });
+        ctx.commands.register('embed', ({ texts, role = 'doc', profileId, model } = {}) => call('/embeddings/embed', 'POST', {
+            texts, role, profileId: profileId ?? ctx.settings.get('meaningProfile'), model: model ?? ctx.settings.get('meaningModel'),
+        }), { title: 'Embed texts through a connection\'s embeddings: { model, signature, dim, vectors }' });
 
         // ---- the menu door and the view ----
         ctx.ui.contribute('app.action', {
@@ -78,7 +80,7 @@ export default {
                 <div class="tdb">
                     <header class="tdb-hero">
                         <h2 class="tdb-hero-title"><i class="fa-solid fa-diagram-project" aria-hidden="true"></i> TriviumDB</h2>
-                        <p class="tdb-hero-lead">The vector, graph and full-text engine other extensions build on, and its debug tools. Smart Recall is the example built on it.</p>
+                        <p class="tdb-hero-lead">The vector, graph and full-text engine other extensions build on, and its debug tools.</p>
                     </header>
                     <section class="tdb-card">
                         <h3 class="tdb-heading">Meaning test</h3>
@@ -165,6 +167,7 @@ export default {
     },
 
     dispose() {
-        if (typeof window !== 'undefined') delete window.__SIGMA_TRIVIUM__;
+        removeTauriTavern();
+        removeTauriTavern = () => {};
     },
 };
