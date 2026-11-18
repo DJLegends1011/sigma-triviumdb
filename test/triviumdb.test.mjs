@@ -128,7 +128,9 @@ test('client page boot: the triviumdb.* commands, and the handle where TauriTave
     assert.equal(typeof tauri?.api?.db?.open, 'function', 'the TauriTavern translation layer');
 
     // Open playground through the command and query it
-    const handle = await page.registry.runCommand('triviumdb.open', { namespace: 'playground', options: { dim: 4 } });
+    const opened = await page.registry.runCommand('triviumdb.open', { namespace: 'playground', options: { dim: 4 } });
+    assert.equal(opened.ok, true, JSON.stringify(opened));
+    const handle = opened.value;
     const viaTauri = await tauri.api.db.open('playground', { dim: 4 });
     assert.equal(viaTauri.namespace, 'playground');
     assert.equal(handle.namespace, 'playground');
@@ -151,6 +153,18 @@ test('client page boot: the triviumdb.* commands, and the handle where TauriTave
     assert.ok(page.registry.hasCommand('triviumdb.query'));
     assert.ok(page.registry.hasCommand('triviumdb.rank'));
     assert.ok(page.registry.hasCommand('triviumdb.embed'));
+
+    // a failing command answers its reason; Σ would turn a throw into a bare undefined
+    const badTexts = await page.registry.runCommand('triviumdb.embed', { texts: [] });
+    assert.deepEqual(badTexts, { ok: false, error: 'texts must be a list of non-empty strings.' });
+    const noConnection = await page.registry.runCommand('triviumdb.embed', { texts: ['dragon fire'] });
+    assert.equal(noConnection.ok, false);
+    assert.match(noConnection.error, /Pick a connection/);
+    const badQuery = await page.registry.runCommand('triviumdb.query', { namespace: 'playground', query: 'NOT TQL AT ALL' });
+    assert.equal(badQuery.ok, false);
+    assert.ok(typeof badQuery.error === 'string' && badQuery.error.length > 0, JSON.stringify(badQuery));
+    const status = await page.registry.runCommand('triviumdb.status');
+    assert.equal(status.ok, true, JSON.stringify(status));
 });
 
 test('the TriviumDB view renders the meaning test and the workbench; settings render', async () => {

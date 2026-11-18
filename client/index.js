@@ -27,31 +27,36 @@ export default {
         const esc = (s) => CoreAPI.escapeHtml(String(s ?? ''));
         const call = ctx.server.call;
         const dbApi = createTriviumClientApi(call);
+        // Sigma contains an extension's command: a throw or rejection answers undefined, so a caller would never
+        // learn why. Every triviumdb.* command answers { ok: true, value } or { ok: false, error } and never throws.
+        const command = (name, fn, meta) => ctx.commands.register(name, async (args) => {
+            try { return { ok: true, value: await fn(args) }; } catch (e) { return { ok: false, error: why(e) }; }
+        }, meta);
 
         // ---- the engine for other extensions ----
         removeTauriTavern = exposeAsTauriTavern(dbApi);
-        ctx.commands.register('open', ({ namespace = 'playground', options = {} } = {}) => dbApi.open(namespace, options), {
+        command('open', ({ namespace = 'playground', options = {} } = {}) => dbApi.open(namespace, options), {
             title: 'Open a TriviumDB namespace handle',
         });
-        ctx.commands.register('list-namespaces', () => dbApi.listNamespaces(), { title: 'List open TriviumDB namespaces' });
-        ctx.commands.register('status', () => dbApi.status(), { title: 'Get TriviumDB engine status' });
-        ctx.commands.register('seed-demo', ({ namespace = 'playground', reset = true } = {}) => dbApi.seedDemo(namespace, reset), {
+        command('list-namespaces', () => dbApi.listNamespaces(), { title: 'List open TriviumDB namespaces' });
+        command('status', () => dbApi.status(), { title: 'Get TriviumDB engine status' });
+        command('seed-demo', ({ namespace = 'playground', reset = true } = {}) => dbApi.seedDemo(namespace, reset), {
             title: 'Seed the TriviumDB playground knowledge graph',
         });
-        ctx.commands.register('query', async ({ namespace = 'playground', query = 'MATCH (n) RETURN n', params = {}, dim } = {}) => {
+        command('query', async ({ namespace = 'playground', query = 'MATCH (n) RETURN n', params = {}, dim } = {}) => {
             const db = await dbApi.open(namespace, dim ? { dim } : {});
             return db.query(query, params);
         }, { title: 'Execute a TQL query or mutation on a TriviumDB namespace' });
-        ctx.commands.register('search', async ({ namespace = 'playground', vector = null, queryText = '', topK = 5, expandDepth = 1, advanced = false, dim } = {}) => {
+        command('search', async ({ namespace = 'playground', vector = null, queryText = '', topK = 5, expandDepth = 1, advanced = false, dim } = {}) => {
             const db = await dbApi.open(namespace, dim ? { dim } : {});
             return advanced
                 ? db.searchAdvanced(vector, { queryText, topK, expandDepth })
                 : db.search(vector, { queryText, topK, expandDepth });
         }, { title: 'Search a TriviumDB namespace (vector + BM25 + graph diffusion)' });
-        ctx.commands.register('rank', ({ query, texts, profileId, model } = {}) => call('/embeddings/rank', 'POST', {
+        command('rank', ({ query, texts, profileId, model } = {}) => call('/embeddings/rank', 'POST', {
             query, texts, profileId: profileId ?? ctx.settings.get('meaningProfile'), model: model ?? ctx.settings.get('meaningModel'),
         }), { title: 'Rank texts against a query by meaning, through a connection\'s embeddings' });
-        ctx.commands.register('embed', ({ texts, role = 'doc', profileId, model } = {}) => call('/embeddings/embed', 'POST', {
+        command('embed', ({ texts, role = 'doc', profileId, model } = {}) => call('/embeddings/embed', 'POST', {
             texts, role, profileId: profileId ?? ctx.settings.get('meaningProfile'), model: model ?? ctx.settings.get('meaningModel'),
         }), { title: 'Embed texts through a connection\'s embeddings: { model, signature, dim, vectors }' });
 
