@@ -1,7 +1,7 @@
 {
     "id": "triviumdb",
     "name": "TriviumDB",
-    "version": "0.3.2",
+    "version": "0.4.0",
     "author": "DJLegends",
     "description": "Embedded vector, knowledge-graph, BM25 full-text and TQL database engine (TriviumDB 0.9.0) for other Project Σ extensions, through triviumdb.* commands (open, search, query, embed, rank), with TauriTavern's database API for ported extensions. Its view is a debug workbench with a meaning test for embedding connections.",
     "requires": {
