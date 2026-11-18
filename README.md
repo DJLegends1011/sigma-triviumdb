@@ -4,7 +4,7 @@ Embedded **vector + knowledge graph + BM25 full-text + TQL** engine ([TriviumDB 
 
 ## For extensions
 
-Everything goes through Project Σ commands, run from your page half with `ctx.commands.run`:
+Everything goes through Project Σ commands, run from your page half with `ctx.commands.run`. Every command answers `{ ok: true, value }` or `{ ok: false, error }` and never throws: Σ contains extension commands, so a throwing one would reach you as a bare `undefined`. A missing answer (`undefined`) means TriviumDB is not installed or enabled. The handle `triviumdb.open` gives you is a plain object whose methods reject normally.
 - `triviumdb.open` `{ namespace, options: { dim } }` → a handle (insert, link, search, searchAdvanced, TQL `query`, subgraph, Leiden clustering, indexes…).
 - `triviumdb.search`, `triviumdb.query`, `triviumdb.list-namespaces`, `triviumdb.status`, `triviumdb.seed-demo`.
 - `triviumdb.embed` `{ texts, role: 'doc' | 'query', profileId?, model? }` → `{ model, signature, dim, vectors }`: embeddings through the account's connections (OpenAI-compatible, OpenRouter, Google AI Studio with retrieval task types, nomic prefixes). Store `signature` with your vectors and re-embed when it changes.

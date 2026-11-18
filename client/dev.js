@@ -122,21 +122,24 @@ export function mountDevTools(el, { dbApi, CoreAPI }) {
 
             <section class="tdb-panel">
                 <h3 class="tdb-heading">5. Quick-Start Snippet for Project Σ Extensions</h3>
-                <p class="tdb-note">Use the Project Σ command contract <code>ctx.commands.run('triviumdb.*')</code>:</p>
-                <pre class="tdb-pre">const db = await ctx.commands.run('triviumdb.open', {
+                <p class="tdb-note">Use the Project Σ command contract <code>ctx.commands.run('triviumdb.*')</code>. Every command answers <code>{ ok: true, value }</code> or <code>{ ok: false, error }</code> and never throws (Σ turns a throwing command into <code>undefined</code>); the handle's own methods reject normally:</p>
+                <pre class="tdb-pre">const opened = await ctx.commands.run('triviumdb.open', {
   namespace: 'my-ext', options: { dim: 1536 }
 });
+if (!opened?.ok) throw new Error(opened?.error || 'TriviumDB is not enabled');
+const db = opened.value;
 const a = await db.insert(vecA, { name: 'Alice', text: 'Knows the vault code' });
 const b = await db.insert(vecB, { name: 'Vault 7', kind: 'location' });
 await db.link(a, b, 'infiltrated', 0.95);
 await db.indexText(a, 'Alice knows the vault code');
 await db.buildTextIndex();
 
-const hits = await ctx.commands.run('triviumdb.search', {
+const found = await ctx.commands.run('triviumdb.search', {
   namespace: 'my-ext', advanced: true, queryText: 'vault code',
   topK: 5,
   expandDepth: 2
 });
+const hits = found?.ok ? found.value : [];
 const rows = await db.query('MATCH (n) WHERE n.id == $id RETURN n', { id: a });</pre>
             </section>
 
