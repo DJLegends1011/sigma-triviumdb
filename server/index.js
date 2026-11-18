@@ -36,9 +36,6 @@ export const migrations = [
     DROP TABLE IF EXISTS x_triviumdb_meta;`,
 ];
 
-// the server API's version: bumped when a door other extensions use changes or is added
-const SERVER_API = 1;
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const NATIVE_DIR = path.resolve(__dirname, '..', 'native');
 const require = createRequire(import.meta.url);
@@ -822,44 +819,25 @@ export function register(router, ctx) {
         }
     });
 
-    // ---- the server API, for other extensions' server halves: globalThis.__SIGMA_TRIVIUM_SERVER__ ----
+    // ---- embeddings through the account's connections: the meaning test, and triviumdb.embed for other extensions ----
     const embeddings = createEmbeddings(ctx);
-    const disabledError = 'Enable the TriviumDB extension in Settings > Extensions';
-    function isEnabledFor(db) {
-        if (!db) return false;
+
+    // texts in, one vector each through a connection's embeddings (role 'query' for a search, 'doc' for what is stored)
+    router.post('/embeddings/embed', async (req, res) => {
         try {
-            const list = ctx.settingValue(db, 'enabledExtensions', []);
-            return Array.isArray(list) && list.includes('triviumdb');
-        } catch { return false; }
-    }
-    const serverApi = Object.freeze({
-        apiVersion: SERVER_API,
-        version: '0.9.0',
-        /** Whether the native engine loaded on this device, and which binary. */
-        isEnabled: isEnabledFor,
-        status(db) {
-            if (db && !isEnabledFor(db)) return { ok: false, error: disabledError };
-            const { TriviumDB, error, binary } = loadNativeAddon();
-            return { ok: !!TriviumDB, binary, error, platform: `${process.platform}-${process.arch}` };
-        },
-        /** A namespace of that account, opened (or the open one): { namespace, dim, db } with db the native handle. */
-        open(user, db, namespace, options = {}) {
-            if (db && !isEnabledFor(db)) throw new Error(disabledError);
-            openNamespace(user, db, namespace, options);
-            return getOpenInstance(user, namespace);
-        },
-        /** Close a namespace and delete its files. */
-        drop: (user, namespace) => dropNamespace(user, namespace),
-        /** The TauriTavern-style operations of the /handle route, on an open namespace. */
-        execute: (user, namespace, operation) => executeOperation(getOpenInstance(user, namespace), operation),
-        /** Embeddings through the account's connections: targetOf(db, profileId, model), embed(target, texts, opts), signatureOf(target). */
-        embeddings,
-        keywordQuery,
-        /** A deterministic stand-in vector for text, for tests and words-only namespaces. */
-        textVector: textToDemoVector,
-        sanitize: sanitizeBigInt,
+            const texts = (Array.isArray(req.body?.texts) ? req.body.texts : []).map(x => String(x ?? '').trim());
+            if (!texts.length || texts.some(t => !t)) return res.status(400).json({ error: 'texts must be a list of non-empty strings.' });
+            if (texts.length > 256) return res.status(400).json({ error: 'At most 256 texts per call.' });
+            const role = req.body?.role === 'query' ? 'query' : 'doc';
+            const target = embeddings.targetOf(req.db, String(req.body?.profileId || ''), String(req.body?.model || ''));
+            if (!target) return res.status(400).json({ error: 'Pick a connection first.' });
+            if (target.error) return res.status(400).json({ error: target.error });
+            const vectors = await embeddings.embed(target, texts, { role, signal: AbortSignal.timeout(120_000) });
+            res.json({ model: target.model, signature: embeddings.signatureOf(target), dim: vectors[0]?.length ?? 0, vectors });
+        } catch (e) {
+            res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+        }
     });
-    globalThis.__SIGMA_TRIVIUM_SERVER__ = serverApi;
 
     // ---- the meaning test: how a connection's embeddings rank texts against a query ----
     router.post('/embeddings/test', async (req, res) => {
@@ -893,7 +871,8 @@ export function register(router, ctx) {
             const docs = await embeddings.embed(target, texts, { role: 'doc', signal });
             const embedMs = Date.now() - t0;
             dropNamespace(req.userHandle, ns);
-            const entry = serverApi.open(req.userHandle, req.db, ns, { dim: qv.length, syncMode: 'off' });
+            openNamespace(req.userHandle, req.db, ns, { dim: qv.length, syncMode: 'off' });
+            const entry = getOpenInstance(req.userHandle, ns);
             const ids = texts.map((text, i) => {
                 const id = entry.db.insert(docs[i], { i, text });
                 entry.db.indexText(id, text);

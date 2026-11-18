@@ -1,4 +1,4 @@
-// TriviumDB's meaning test and server API: a connection's embeddings ranking texts against a query, and the
+// TriviumDB's meaning test and embed route: a connection's embeddings ranking texts against a query, and the
 // Gemini request shape (retrieval task types). Mock embedding servers stand in for OpenAI and Google.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -99,27 +99,26 @@ test('the connection test and the errors say what is wrong', async () => {
     assert.match(none.body.error, /Pick a connection/);
 });
 
-test('the server API is there for other extensions', async () => {
-    const T = globalThis.__SIGMA_TRIVIUM_SERVER__;
-    assert.ok(T, 'globalThis.__SIGMA_TRIVIUM_SERVER__');
-    assert.equal(T.apiVersion, 1);
-    assert.equal(T.status().ok, true);
-    for (const k of ['open', 'drop', 'execute', 'keywordQuery', 'textVector', 'sanitize']) assert.equal(typeof T[k], 'function', k);
-    for (const k of ['targetOf', 'embed', 'signatureOf']) assert.equal(typeof T.embeddings[k], 'function', k);
+test('/embeddings/embed (triviumdb.embed): one vector per text, and the errors say what is wrong', async () => {
+    const r = await ext('/embeddings/embed', 'POST', { texts: ['dragon fire', 'tea at the inn'], role: 'query', profileId: openai.body.id });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.vectors.length, 2);
+    assert.equal(r.body.dim, DIM);
+    assert.ok(r.body.vectors.every(v => v.length === DIM));
+    assert.ok(typeof r.body.signature === 'string' && r.body.signature.includes(r.body.model), r.body.signature);
+    for (const texts of [[], ['x', ''], 'x']) {
+        const bad = await ext('/embeddings/embed', 'POST', { texts, profileId: openai.body.id });
+        assert.equal(bad.status, 400, JSON.stringify(texts));
+    }
+    const many = await ext('/embeddings/embed', 'POST', { texts: new Array(257).fill('x'), profileId: openai.body.id });
+    assert.equal(many.status, 400);
+    const none = await ext('/embeddings/embed', 'POST', { texts: ['x'] });
+    assert.equal(none.status, 400);
+    assert.match(none.body.error, /Pick a connection/);
 });
 
-test('server API refuses accounts without TriviumDB enabled before opening a namespace', () => {
-    const T = globalThis.__SIGMA_TRIVIUM_SERVER__;
-    const account = (list) => ({ prepare: () => ({ get: () => ({ value: JSON.stringify(list) }) }) });
-    for (const list of [[], null, {}, 'triviumdb', ['smart-recall']]) {
-        const db = account(list);
-        assert.equal(T.isEnabled(db), false);
-        assert.equal(T.status(db).ok, false);
-        assert.match(T.status(db).error, /Enable the TriviumDB extension in Settings > Extensions/);
-        assert.throws(() => T.open('disabled-account', db, 'forbidden', { dim: 32 }), /Enable the TriviumDB/);
-    }
-    assert.equal(T.isEnabled(account(['triviumdb'])), true);
-    assert.equal(T.status().ok, true, 'device status remains available without an account');
+test('no server globals: other extensions use the triviumdb.* commands', () => {
+    assert.deepEqual(Object.keys(globalThis).filter(k => /^__SIGMA_/.test(k)), []);
 });
 
 test('Gemini embeds documents as RETRIEVAL_DOCUMENT and the query as RETRIEVAL_QUERY', { skip: !GOOGLE_AI && 'google-ai is not beside this extension' }, async () => {

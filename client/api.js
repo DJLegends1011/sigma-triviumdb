@@ -5,6 +5,19 @@
 export const why = (e) => (e instanceof Error ? e.message : String(e));
 
 /**
+ * The TauriTavern translation layer, and the only place its global is named: extensions written for
+ * TauriTavern's database API find this handle at window.__TAURITAVERN__.api.db. Left alone when a real
+ * TauriTavern host (or anything else) already holds that name. Answers the removal.
+ * @param {ReturnType<typeof createTriviumClientApi>} db
+ */
+export function exposeAsTauriTavern(db) {
+    if (typeof window === 'undefined' || window.__TAURITAVERN__ !== undefined) return () => {};
+    const host = Object.freeze({ api: Object.freeze({ db }) });
+    window.__TAURITAVERN__ = host;
+    return () => { if (window.__TAURITAVERN__ === host) delete window.__TAURITAVERN__; };
+}
+
+/**
  * Build the TauriTavern-compatible `db` API object backed by Project Σ's `/api/ext/triviumdb/handle` route.
  * @param {(path: string, method?: string, body?: any) => Promise<any>} call
  */

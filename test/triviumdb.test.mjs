@@ -118,17 +118,19 @@ test('server status and TauriTavern-compatible database_handle API', async () =>
     assert.equal(seedRes.body.stats.graph.edgeCount, 7);
 });
 
-test('client page boot, window.__SIGMA_TRIVIUM__.db handle, and commands', async () => {
+test('client page boot: the triviumdb.* commands, and the handle where TauriTavern extensions look', async () => {
     page = await sigma.session.page();
     await page.boot();
 
-    // Verify window.__SIGMA_TRIVIUM__.db is exposed and __TAURITAVERN__ is not set
-    const tdbGlobal = globalThis.window.__SIGMA_TRIVIUM__;
-    assert.ok(tdbGlobal?.db, 'window.__SIGMA_TRIVIUM__.db should be installed');
-    assert.equal(globalThis.window.__TAURITAVERN__, undefined);
+    // no Sigma-side globals; the TauriTavern translation layer is the only one
+    assert.deepEqual(Object.keys(globalThis.window).filter(k => /^__SIGMA_/.test(k)), []);
+    const tauri = globalThis.window.__TAURITAVERN__;
+    assert.equal(typeof tauri?.api?.db?.open, 'function', 'the TauriTavern translation layer');
 
-    // Open playground via the client handle and query it
-    const handle = await tdbGlobal.db.open('playground', { dim: 4 });
+    // Open playground through the command and query it
+    const handle = await page.registry.runCommand('triviumdb.open', { namespace: 'playground', options: { dim: 4 } });
+    const viaTauri = await tauri.api.db.open('playground', { dim: 4 });
+    assert.equal(viaTauri.namespace, 'playground');
     assert.equal(handle.namespace, 'playground');
     const stats = await handle.stats();
     assert.equal(stats.nodeCount, 5);
@@ -148,6 +150,7 @@ test('client page boot, window.__SIGMA_TRIVIUM__.db handle, and commands', async
     assert.ok(page.registry.hasCommand('triviumdb.search'));
     assert.ok(page.registry.hasCommand('triviumdb.query'));
     assert.ok(page.registry.hasCommand('triviumdb.rank'));
+    assert.ok(page.registry.hasCommand('triviumdb.embed'));
 });
 
 test('the TriviumDB view renders the meaning test and the workbench; settings render', async () => {

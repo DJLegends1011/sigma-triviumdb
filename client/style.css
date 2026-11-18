@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: 0BSD */
-/* TriviumDB Smart Recall for Project Σ: the view, the chat window, the settings and the developer workbench.
+/* TriviumDB for Project Σ: the view, the settings and the developer workbench.
    Laid out for a phone first: everything wraps, nothing is wider than its container. */
 
-/* ---------- the Smart Recall view ---------- */
+/* ---------- the TriviumDB view ---------- */
 
 .tdb {
     box-sizing: border-box;
