@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: GPL-3.0-only
 // TriviumDB for Project Σ — Server Half:
 // Multi-namespace TriviumDB 0.9.0 instance manager, TauriTavern-compatible database_handle
 // execution contract, TQL parameter binding, {{trivium_recall}} macro, and optional prompt block.

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: GPL-3.0-only
 // TriviumDB for Project Σ — the developer workbench: the engine's raw doors (stats, hybrid search,
 // TQL, graph traversal, CRUD) on a sample namespace, for extension authors.
 

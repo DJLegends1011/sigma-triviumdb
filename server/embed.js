@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: GPL-3.0-only
 // TriviumDB for Project Σ — embeddings through the account's own connections: OpenAI-compatible servers
 // (OpenAI, OpenRouter, Ollama, LM Studio, vLLM…) and Google AI Studio. Other extensions reach them
 // through the triviumdb.embed and triviumdb.rank commands.

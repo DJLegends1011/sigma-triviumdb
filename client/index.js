@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: GPL-3.0-only
 // TriviumDB for Project Σ — the client half: the engine for other extensions and its debug view.
 // 1. The triviumdb.* commands, and the same handle where TauriTavern extensions look for it (client/api.js).
 // 2. The TriviumDB view: a meaning test (how a connection's embeddings rank texts against a query), then the

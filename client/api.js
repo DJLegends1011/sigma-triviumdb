@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: GPL-3.0-only
 // TriviumDB for Project Σ — the client's database handle, backed by /api/ext/triviumdb/handle.
 
 /** @param {unknown} e */
